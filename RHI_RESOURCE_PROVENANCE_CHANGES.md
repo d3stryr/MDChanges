@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [7c51c9112d99fe04a8605f657adc06f26f84cf32](https://github.com/d3stryr/UnrealEngine/commit/7c51c9112d99fe04a8605f657adc06f26f84cf32)
+- Source commit: [82a2f99c15b0359e1d255ce3a943113fb42a8690](https://github.com/d3stryr/UnrealEngine/commit/82a2f99c15b0359e1d255ce3a943113fb42a8690)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -18,8 +18,8 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `889c2d71156c4ac7d2b615f83363fd1dbb9157c6` | Added | Development-only recorder interface, operation types, caller capture, command correlation API. |
 | `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `376423f2374a974e391bd228b44db795fbd771b6` | Added | Bounded per-thread events, retained identity generations, lifecycle history, failure reporting, and optional command-use capture. |
-| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `08c77b2b3f3dabd40a49016719e75530c974c869` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture. |
-| `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `4d90a0a9fe16966908379fcc5d6057107e88c73e` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
+| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `ede7daabe67b66003632cf15ff85478285abea2c` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture. |
+| `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `29141cd8304cf9155b213579171a44f5efaf6960` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `f7f865fd5698f00ed2d4b7ed8fe4830baab73644` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `61b33eaa74ea2b1945cf05fe4194dd28302d2acd` | Modified | Records correlated execution of selected RHI commands. |
 
@@ -80,6 +80,14 @@ These limits intentionally bound memory use. Event overwrites, identity eviction
 - A full Development PS5 rebuild is required because the Development layout of `FRHIResource` changed.
 
 ## Change log
+
+### 2026-09-21 — PS5 shadow-warning compile fix
+
+- Renamed Development diagnostic `ResourceType` parameters in `FRHIResource::FAtomicFlags` to `InResourceType`.
+- Renamed the `FRHIResource::MarkForDelete` diagnostic parameter consistently.
+- Renamed the `DeleteResources` local token to `ResourceTypeValue`.
+- Updated the complete mirrored copies of `RHIResources.h` and `RHIResources.cpp`.
+- This resolves PS5 warnings-as-errors such as “declaration shadows a field of FRHIResource” in `Release`, `UnmarkForDelete`, and related methods.
 
 ### 2026-09-21 — Initial mirror
 
