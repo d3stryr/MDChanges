@@ -2,7 +2,7 @@
 
 #include "RHIResourceProvenance.h"
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformProcess.h"
@@ -670,4 +670,4 @@ void ReportInvalidAtomic(
 
 } // namespace UE::RHI::ResourceProvenance
 
-#endif // UE_BUILD_DEVELOPMENT
+#endif // RHI_RESOURCE_PROVENANCE_ENABLED
