@@ -64,7 +64,7 @@ protected:
 private:
 	// Separate function to avoid force inlining this everywhere. Helps both for code size and performance.
 #if UE_BUILD_DEVELOPMENT
-	RHI_API void MarkForDelete(uint64 ResourceId, uint8 ResourceType, uint64 CallerAddress) const;
+	RHI_API void MarkForDelete(uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress) const;
 #else
 	RHI_API void MarkForDelete() const;
 #endif
@@ -188,7 +188,7 @@ private:
 
 	public:
 #if UE_BUILD_DEVELOPMENT
-		int32 AddRef(const void* ResourceAddress, uint64 ResourceId, uint8 ResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
+		int32 AddRef(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		int32 AddRef(std::memory_order MemoryOrder)
 #endif
@@ -198,12 +198,12 @@ private:
 #if UE_BUILD_DEVELOPMENT
 			UE::RHI::ResourceProvenance::Record(
 				UE::RHI::ResourceProvenance::EOperation::AddRef,
-				ResourceAddress, this, ResourceId, ResourceType, OldPacked, CallerAddress);
+				ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
 			if ((OldPacked & DeletingBit) != 0)
 			{
 				UE::RHI::ResourceProvenance::ReportInvalidAtomic(
 					TEXT("AddRef observed DeletingBit"),
-					ResourceAddress, this, ResourceId, ResourceType, OldPacked, CallerAddress);
+					ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
 			}
 			checkf((OldPacked & DeletingBit) == 0,
 				TEXT("Resource is being deleted. Resource=%p Flags=%p ProvenanceId=%llu OldPacked=0x%08x CallerPC=0x%llx"),
@@ -216,7 +216,7 @@ private:
 		}
 
 #if UE_BUILD_DEVELOPMENT
-		int32 Release(const void* ResourceAddress, uint64 ResourceId, uint8 ResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
+		int32 Release(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		int32 Release(std::memory_order MemoryOrder)
 #endif
@@ -228,12 +228,12 @@ private:
 				(OldPacked & NumRefsMask) == 1
 					? UE::RHI::ResourceProvenance::EOperation::FinalRelease
 					: UE::RHI::ResourceProvenance::EOperation::Release,
-				ResourceAddress, this, ResourceId, ResourceType, OldPacked, CallerAddress);
+				ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
 			if ((OldPacked & DeletingBit) != 0)
 			{
 				UE::RHI::ResourceProvenance::ReportInvalidAtomic(
 					TEXT("Release observed DeletingBit"),
-					ResourceAddress, this, ResourceId, ResourceType, OldPacked, CallerAddress);
+					ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
 			}
 			checkf((OldPacked & DeletingBit) == 0,
 				TEXT("Resource is being deleted. Resource=%p Flags=%p ProvenanceId=%llu OldPacked=0x%08x CallerPC=0x%llx"),
@@ -246,7 +246,7 @@ private:
 		}
 
 #if UE_BUILD_DEVELOPMENT
-		bool MarkForDelete(const void* ResourceAddress, uint64 ResourceId, uint8 ResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
+		bool MarkForDelete(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		bool MarkForDelete(std::memory_order MemoryOrder)
 #endif
@@ -258,14 +258,14 @@ private:
 				bWasAlreadyMarked
 					? UE::RHI::ResourceProvenance::EOperation::MarkForDeleteAlreadySet
 					: UE::RHI::ResourceProvenance::EOperation::MarkForDelete,
-				ResourceAddress, this, ResourceId, ResourceType, OldPacked, CallerAddress);
+				ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
 #endif
 			check((OldPacked & DeletingBit) == 0);
 			return bWasAlreadyMarked;
 		}
 
 #if UE_BUILD_DEVELOPMENT
-		bool UnmarkForDelete(const void* ResourceAddress, uint64 ResourceId, uint8 ResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
+		bool UnmarkForDelete(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		bool UnmarkForDelete(std::memory_order MemoryOrder)
 #endif
@@ -274,7 +274,7 @@ private:
 #if UE_BUILD_DEVELOPMENT
 			UE::RHI::ResourceProvenance::Record(
 				UE::RHI::ResourceProvenance::EOperation::DeleteCancelled,
-				ResourceAddress, this, ResourceId, ResourceType, OldPacked, CallerAddress);
+				ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
 #endif
 			check((OldPacked & DeletingBit) == 0);
 			bool OldMarkedForDelete = (OldPacked & MarkedForDeleteBit) != 0;
@@ -283,7 +283,7 @@ private:
 		}
 
 #if UE_BUILD_DEVELOPMENT
-		bool Deleting(const void* ResourceAddress, uint64 ResourceId, uint8 ResourceType, uint64 CallerAddress)
+		bool Deleting(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress)
 #else
 		bool Deleting()
 #endif
@@ -292,7 +292,7 @@ private:
 #if UE_BUILD_DEVELOPMENT
 			UE::RHI::ResourceProvenance::Record(
 				UE::RHI::ResourceProvenance::EOperation::DeleteCheck,
-				ResourceAddress, this, ResourceId, ResourceType, LocalPacked, CallerAddress);
+				ResourceAddress, this, ResourceId, InResourceType, LocalPacked, CallerAddress);
 #endif
 			check((LocalPacked & MarkedForDeleteBit) != 0);
 			check((LocalPacked & DeletingBit) == 0);
@@ -305,7 +305,7 @@ private:
 #if UE_BUILD_DEVELOPMENT
 				UE::RHI::ResourceProvenance::Record(
 					UE::RHI::ResourceProvenance::EOperation::DeleteBegin,
-					ResourceAddress, this, ResourceId, ResourceType, OldPacked, CallerAddress);
+					ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
 #endif
 #endif
 				return true;
@@ -313,7 +313,7 @@ private:
 			else
 			{
 #if UE_BUILD_DEVELOPMENT
-				UnmarkForDelete(ResourceAddress, ResourceId, ResourceType, CallerAddress, std::memory_order_release);
+				UnmarkForDelete(ResourceAddress, ResourceId, InResourceType, CallerAddress, std::memory_order_release);
 #else
 				UnmarkForDelete(std::memory_order_release);
 #endif
