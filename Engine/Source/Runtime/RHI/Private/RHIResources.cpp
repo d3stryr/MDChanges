@@ -25,7 +25,7 @@ FRHIResource::FRHIResource(ERHIResourceType InResourceType)
 	, bBeingTracked(false)
 #endif
 {
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	ProvenanceId = UE::RHI::ResourceProvenance::RegisterResource(
 		this,
 		&AtomicFlags,
@@ -39,7 +39,7 @@ FRHIResource::FRHIResource(ERHIResourceType InResourceType)
 
 FRHIResource::~FRHIResource()
 {
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	UE::RHI::ResourceProvenance::Record(
 		UE::RHI::ResourceProvenance::EOperation::DestructorBegin,
 		this,
@@ -60,13 +60,13 @@ FRHIResource::~FRHIResource()
 #endif
 }
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 void FRHIResource::MarkForDelete(uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress) const
 #else
 void FRHIResource::MarkForDelete() const
 #endif
 {
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	const bool bWasAlreadyMarked = AtomicFlags.MarkForDelete(
 		this,
 		ResourceId,
@@ -93,7 +93,7 @@ void FRHIResource::DeleteResources(TArray<FRHIResource*> const& Resources)
 {
 	for (FRHIResource* Resource : Resources)
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const void* ResourceAddress = Resource;
 		const void* FlagsAddress = &Resource->AtomicFlags;
 		const uint64 ResourceId = Resource->ProvenanceId;
@@ -111,7 +111,7 @@ void FRHIResource::DeleteResources(TArray<FRHIResource*> const& Resources)
 #endif
 			delete Resource;
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			// The delete expression has completed. Use only the saved tokens above;
 			// Resource must not be dereferenced here.
 			UE::RHI::ResourceProvenance::Record(
@@ -198,7 +198,7 @@ FRHITexture::FRHITexture(ERHIResourceType InResourceType)
 void FRHITexture::SetName(FName InName)
 {
 	Name = InName;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	const FString NameString = InName.ToString();
 	SetProvenanceDebugName(*NameString);
 #endif
@@ -521,7 +521,7 @@ FRHIUniformBufferLayout::FRHIUniformBufferLayout(const FRHIUniformBufferLayoutIn
 	, BindingFlags(Initializer.BindingFlags)
 	, Flags(Initializer.Flags)
 {
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	SetProvenanceDebugName(*Name);
 #endif
 }
