@@ -61,7 +61,7 @@ FRHIResource::~FRHIResource()
 }
 
 #if UE_BUILD_DEVELOPMENT
-void FRHIResource::MarkForDelete(uint64 ResourceId, uint8 ResourceTypeValue, uint64 CallerAddress) const
+void FRHIResource::MarkForDelete(uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress) const
 #else
 void FRHIResource::MarkForDelete() const
 #endif
@@ -70,7 +70,7 @@ void FRHIResource::MarkForDelete() const
 	const bool bWasAlreadyMarked = AtomicFlags.MarkForDelete(
 		this,
 		ResourceId,
-		ResourceTypeValue,
+		InResourceType,
 		CallerAddress,
 		std::memory_order_release);
 #else
@@ -97,10 +97,10 @@ void FRHIResource::DeleteResources(TArray<FRHIResource*> const& Resources)
 		const void* ResourceAddress = Resource;
 		const void* FlagsAddress = &Resource->AtomicFlags;
 		const uint64 ResourceId = Resource->ProvenanceId;
-		const uint8 ResourceType = static_cast<uint8>(Resource->ResourceType);
+		const uint8 ResourceTypeValue = static_cast<uint8>(Resource->ResourceType);
 		const uint64 CallerAddress = UE::RHI::ResourceProvenance::CaptureCallerAddress();
 		const bool bDeleting = Resource->AtomicFlags.Deleting(
-			ResourceAddress, ResourceId, ResourceType, CallerAddress);
+			ResourceAddress, ResourceId, ResourceTypeValue, CallerAddress);
 #else
 		const bool bDeleting = Resource->AtomicFlags.Deleting();
 #endif
@@ -119,7 +119,7 @@ void FRHIResource::DeleteResources(TArray<FRHIResource*> const& Resources)
 				ResourceAddress,
 				FlagsAddress,
 				ResourceId,
-				ResourceType,
+				ResourceTypeValue,
 				0,
 				CallerAddress);
 #endif
