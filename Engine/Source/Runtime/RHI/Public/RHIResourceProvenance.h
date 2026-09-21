@@ -4,7 +4,11 @@
 
 #include "CoreTypes.h"
 
-#if UE_BUILD_DEVELOPMENT
+#ifndef RHI_RESOURCE_PROVENANCE_ENABLED
+#define RHI_RESOURCE_PROVENANCE_ENABLED 0
+#endif
+
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 
 #if defined(_MSC_VER)
 #include <intrin.h>
@@ -76,4 +80,4 @@ namespace UE::RHI::ResourceProvenance
 		uint64 CallerAddress);
 }
 
-#endif // UE_BUILD_DEVELOPMENT
+#endif // RHI_RESOURCE_PROVENANCE_ENABLED
