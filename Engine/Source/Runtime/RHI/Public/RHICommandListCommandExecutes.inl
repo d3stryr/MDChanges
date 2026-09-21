@@ -116,7 +116,7 @@ void FRHICommandSetStencilRef::Execute(FRHICommandListBase& CmdList)
 template<> RHI_EXECUTE_API void FRHICommandSetShaderParameters<FRHIComputeShader>::Execute(FRHICommandListBase& CmdList)
 {
 	RHISTAT(SetShaderParameters);
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	RHIRecordShaderParameterCommandExecute(Shader, ResourceParameters, BindlessParameters, ProvenanceCommandId);
 #endif
 	INTERNAL_DECORATOR_COMPUTE(RHISetShaderParameters)(Shader, ParametersData, Parameters, ResourceParameters, BindlessParameters);
@@ -125,7 +125,7 @@ template<> RHI_EXECUTE_API void FRHICommandSetShaderParameters<FRHIComputeShader
 template<> RHI_EXECUTE_API void FRHICommandSetShaderParameters<FRHIGraphicsShader>::Execute(FRHICommandListBase& CmdList)
 {
 	RHISTAT(SetShaderParameters);
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	RHIRecordShaderParameterCommandExecute(Shader, ResourceParameters, BindlessParameters, ProvenanceCommandId);
 #endif
 	INTERNAL_DECORATOR(RHISetShaderParameters)(Shader, ParametersData, Parameters, ResourceParameters, BindlessParameters);
@@ -457,7 +457,7 @@ void FRHICommandSetStaticUniformBuffers::Execute(FRHICommandListBase& CmdList)
 void FRHICommandSetStaticUniformBuffer::Execute(FRHICommandListBase& CmdList)
 {
 	RHISTAT(SetStaticUniformBuffer);
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	UE::RHI::ResourceProvenance::RecordCommandUse(
 		UE::RHI::ResourceProvenance::EOperation::CommandExecute,
 		Buffer,
