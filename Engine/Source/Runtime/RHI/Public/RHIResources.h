@@ -63,7 +63,7 @@ protected:
 
 private:
 	// Separate function to avoid force inlining this everywhere. Helps both for code size and performance.
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	RHI_API void MarkForDelete(uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress) const;
 #else
 	RHI_API void MarkForDelete() const;
@@ -77,7 +77,7 @@ private:
 public:
 	inline uint32 AddRef() const
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const uint64 ResourceId = ProvenanceId;
 		const uint8 ResourceTypeValue = static_cast<uint8>(ResourceType);
 		const uint64 CallerAddress = UE::RHI::ResourceProvenance::CaptureCallerAddress();
@@ -91,7 +91,7 @@ public:
 
 	inline uint32 Release() const
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		// Capture every diagnostic token before the decrement can publish the final release.
 		const uint64 ResourceId = ProvenanceId;
 		const uint8 ResourceTypeValue = static_cast<uint8>(ResourceType);
@@ -104,7 +104,7 @@ public:
 
 		if (NewValue == 0)
 		{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			MarkForDelete(ResourceId, ResourceTypeValue, CallerAddress);
 #else
 			MarkForDelete();
@@ -148,13 +148,13 @@ public:
 #if RHI_ENABLE_RESOURCE_INFO
 		OwnerName = InOwnerName;
 #endif
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const FString OwnerNameString = InOwnerName.ToString();
 		UE::RHI::ResourceProvenance::SetOwnerName(ProvenanceId, *OwnerNameString);
 #endif
 	}
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	inline void SetProvenanceDebugName(const TCHAR* InDebugName) const
 	{
 		UE::RHI::ResourceProvenance::SetDebugName(ProvenanceId, InDebugName);
@@ -187,7 +187,7 @@ private:
 		std::atomic_uint Packed = { 0 };
 
 	public:
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		int32 AddRef(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		int32 AddRef(std::memory_order MemoryOrder)
@@ -195,7 +195,7 @@ private:
 		{
 			uint32 OldPacked = Packed.fetch_add(1, MemoryOrder);
 			int32 NumRefs = (OldPacked & NumRefsMask) + 1;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			UE::RHI::ResourceProvenance::Record(
 				UE::RHI::ResourceProvenance::EOperation::AddRef,
 				ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
@@ -215,7 +215,7 @@ private:
 			return NumRefs;
 		}
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		int32 Release(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		int32 Release(std::memory_order MemoryOrder)
@@ -223,7 +223,7 @@ private:
 		{
 			uint32 OldPacked = Packed.fetch_sub(1, MemoryOrder);
 			int32 NumRefs = (OldPacked & NumRefsMask) - 1;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			UE::RHI::ResourceProvenance::Record(
 				(OldPacked & NumRefsMask) == 1
 					? UE::RHI::ResourceProvenance::EOperation::FinalRelease
@@ -245,7 +245,7 @@ private:
 			return NumRefs;
 		}
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		bool MarkForDelete(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		bool MarkForDelete(std::memory_order MemoryOrder)
@@ -253,7 +253,7 @@ private:
 		{
 			uint32 OldPacked = Packed.fetch_or(MarkedForDeleteBit, MemoryOrder);
 			const bool bWasAlreadyMarked = (OldPacked & MarkedForDeleteBit) != 0;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			UE::RHI::ResourceProvenance::Record(
 				bWasAlreadyMarked
 					? UE::RHI::ResourceProvenance::EOperation::MarkForDeleteAlreadySet
@@ -264,14 +264,14 @@ private:
 			return bWasAlreadyMarked;
 		}
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		bool UnmarkForDelete(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress, std::memory_order MemoryOrder)
 #else
 		bool UnmarkForDelete(std::memory_order MemoryOrder)
 #endif
 		{
 			uint32 OldPacked = Packed.fetch_xor(MarkedForDeleteBit, MemoryOrder);
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			UE::RHI::ResourceProvenance::Record(
 				UE::RHI::ResourceProvenance::EOperation::DeleteCancelled,
 				ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
@@ -282,14 +282,14 @@ private:
 			return OldMarkedForDelete;
 		}
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		bool Deleting(const void* ResourceAddress, uint64 ResourceId, uint8 InResourceType, uint64 CallerAddress)
 #else
 		bool Deleting()
 #endif
 		{
 			uint32 LocalPacked = Packed.load(std::memory_order_acquire);
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			UE::RHI::ResourceProvenance::Record(
 				UE::RHI::ResourceProvenance::EOperation::DeleteCheck,
 				ResourceAddress, this, ResourceId, InResourceType, LocalPacked, CallerAddress);
@@ -302,7 +302,7 @@ private:
 			{
 #if DO_CHECK
 				const uint32 OldPacked = Packed.fetch_or(DeletingBit, std::memory_order_acquire);
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 				UE::RHI::ResourceProvenance::Record(
 					UE::RHI::ResourceProvenance::EOperation::DeleteBegin,
 					ResourceAddress, this, ResourceId, InResourceType, OldPacked, CallerAddress);
@@ -312,7 +312,7 @@ private:
 			}
 			else
 			{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 				UnmarkForDelete(ResourceAddress, ResourceId, InResourceType, CallerAddress, std::memory_order_release);
 #else
 				UnmarkForDelete(std::memory_order_release);
@@ -338,7 +338,7 @@ private:
 		}
 	};
 	mutable FAtomicFlags AtomicFlags;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	uint64 ProvenanceId = 0;
 #endif
 
@@ -1395,7 +1395,7 @@ public:
 	, Layout(InLayout)
 	, LayoutConstantBufferSize(InLayout->ConstantBufferSize)
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		SetProvenanceDebugName(*InLayout->GetDebugName());
 #endif
 	}
@@ -1466,7 +1466,7 @@ protected:
 		}
 #endif
 		SetOwnerName(InOwnerName);
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		SetProvenanceDebugName(InName);
 #endif
 	}
@@ -1791,7 +1791,7 @@ public:
 	void SetName(FName InName)
 	{
 		Name = InName;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const FString NameString = InName.ToString();
 		SetProvenanceDebugName(*NameString);
 #endif
