@@ -819,7 +819,7 @@ public:
 
 	inline void UpdateUniformBuffer(FRHIUniformBuffer* UniformBufferRHI, const void* Contents)
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const uint64 ProvenanceCaller = UE::RHI::ResourceProvenance::CaptureCallerAddress();
 		const uint64 ProvenanceCommandId = UE::RHI::ResourceProvenance::BeginCommandUse(
 			UE::RHI::ResourceProvenance::EOperation::UpdateRequest,
@@ -1598,7 +1598,7 @@ FRHICOMMAND_MACRO(FRHICommandSetStencilRef)
 	RHI_EXECUTE_API void Execute(FRHICommandListBase& CmdList);
 };
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 inline uint64 RHIRecordShaderParameterCommandRequest(
 	FRHIResource* Shader,
 	TConstArrayView<FRHIShaderParameterResource> ResourceParameters,
@@ -1668,7 +1668,7 @@ FRHICOMMAND_MACRO_TPL(TRHIShader, FRHICommandSetShaderParameters)
 	TConstArrayView<FRHIShaderParameter> Parameters;
 	TConstArrayView<FRHIShaderParameterResource> ResourceParameters;
 	TConstArrayView<FRHIShaderParameterResource> BindlessParameters;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	uint64 ProvenanceCommandId;
 #endif
 
@@ -1678,7 +1678,7 @@ FRHICOMMAND_MACRO_TPL(TRHIShader, FRHICommandSetShaderParameters)
 		, TConstArrayView<FRHIShaderParameter> InParameters
 		, TConstArrayView<FRHIShaderParameterResource> InResourceParameters
 		, TConstArrayView<FRHIShaderParameterResource> InBindlessParameters
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		, uint64 InProvenanceCommandId
 #endif
 	)
@@ -1687,7 +1687,7 @@ FRHICOMMAND_MACRO_TPL(TRHIShader, FRHICommandSetShaderParameters)
 		, Parameters(InParameters)
 		, ResourceParameters(InResourceParameters)
 		, BindlessParameters(InBindlessParameters)
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		, ProvenanceCommandId(InProvenanceCommandId)
 #endif
 	{
@@ -2318,20 +2318,20 @@ FRHICOMMAND_MACRO(FRHICommandSetStaticUniformBuffer)
 {
 	FRHIUniformBuffer* Buffer;
 	FUniformBufferStaticSlot Slot;
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 	uint64 ProvenanceCommandId;
 #endif
 
 	inline FRHICommandSetStaticUniformBuffer(
 		FUniformBufferStaticSlot InSlot,
 		FRHIUniformBuffer* InBuffer
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		, uint64 InProvenanceCommandId
 #endif
 	)
 		: Buffer(InBuffer)
 		, Slot(InSlot)
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		, ProvenanceCommandId(InProvenanceCommandId)
 #endif
 	{}
@@ -2670,7 +2670,7 @@ public:
 
 	inline void SetStaticUniformBuffer(FUniformBufferStaticSlot Slot, FRHIUniformBuffer* Buffer)
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const uint64 ProvenanceCaller = UE::RHI::ResourceProvenance::CaptureCallerAddress();
 		const uint64 ProvenanceCommandId = UE::RHI::ResourceProvenance::BeginCommandUse(
 			UE::RHI::ResourceProvenance::EOperation::CommandEnqueue,
@@ -2679,7 +2679,7 @@ public:
 #endif
 		if (Bypass())
 		{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			UE::RHI::ResourceProvenance::RecordCommandUse(
 				UE::RHI::ResourceProvenance::EOperation::CommandExecute,
 				Buffer,
@@ -2692,7 +2692,7 @@ public:
 		ALLOC_COMMAND(FRHICommandSetStaticUniformBuffer)(
 			Slot,
 			Buffer
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			, ProvenanceCommandId
 #endif
 		);
@@ -2716,7 +2716,7 @@ public:
 		, TConstArrayView<FRHIShaderParameterResource> InBindlessParameters
 	)
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const uint64 ProvenanceCommandId = RHIRecordShaderParameterCommandRequest(
 			InShader, InResourceParameters, InBindlessParameters);
 #endif
@@ -2724,7 +2724,7 @@ public:
 
 		if (Bypass())
 		{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			RHIRecordShaderParameterCommandExecute(
 				InShader, InResourceParameters, InBindlessParameters, ProvenanceCommandId);
 #endif
@@ -2738,7 +2738,7 @@ public:
 			, AllocArray(InParameters)
 			, AllocArray(InResourceParameters)
 			, AllocArray(InBindlessParameters)
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			, ProvenanceCommandId
 #endif
 		);
@@ -2753,13 +2753,13 @@ public:
 				InBatchedParameters.Reset();
 			};
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			const uint64 ProvenanceCommandId = RHIRecordShaderParameterCommandRequest(
 				InShader, InBatchedParameters.ResourceParameters, InBatchedParameters.BindlessParameters);
 #endif
 			if (Bypass())
 			{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 				RHIRecordShaderParameterCommandExecute(
 					InShader, InBatchedParameters.ResourceParameters, InBatchedParameters.BindlessParameters, ProvenanceCommandId);
 #endif
@@ -2775,7 +2775,7 @@ public:
 				InBatchedParameters.Parameters,
 				InBatchedParameters.ResourceParameters,
 				InBatchedParameters.BindlessParameters
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 				, ProvenanceCommandId
 #endif
 			);
@@ -3805,7 +3805,7 @@ public:
 		, TConstArrayView<FRHIShaderParameterResource> InBindlessParameters
 	)
 	{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 		const uint64 ProvenanceCommandId = RHIRecordShaderParameterCommandRequest(
 			InShader, InResourceParameters, InBindlessParameters);
 #endif
@@ -3813,7 +3813,7 @@ public:
 
 		if (Bypass())
 		{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			RHIRecordShaderParameterCommandExecute(
 				InShader, InResourceParameters, InBindlessParameters, ProvenanceCommandId);
 #endif
@@ -3827,7 +3827,7 @@ public:
 			, AllocArray(InParameters)
 			, AllocArray(InResourceParameters)
 			, AllocArray(InBindlessParameters)
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			, ProvenanceCommandId
 #endif
 			);
@@ -3844,13 +3844,13 @@ public:
 				InBatchedParameters.Reset();
 			};
 
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 			const uint64 ProvenanceCommandId = RHIRecordShaderParameterCommandRequest(
 				InShader, InBatchedParameters.ResourceParameters, InBatchedParameters.BindlessParameters);
 #endif
 			if (Bypass())
 			{
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 				RHIRecordShaderParameterCommandExecute(
 					InShader, InBatchedParameters.ResourceParameters, InBatchedParameters.BindlessParameters, ProvenanceCommandId);
 #endif
@@ -3866,7 +3866,7 @@ public:
 				InBatchedParameters.Parameters,
 				InBatchedParameters.ResourceParameters,
 				InBatchedParameters.BindlessParameters
-#if UE_BUILD_DEVELOPMENT
+#if RHI_RESOURCE_PROVENANCE_ENABLED
 				, ProvenanceCommandId
 #endif
 			);
