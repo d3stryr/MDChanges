@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [e534bbb47ccc30a79b32c8b1f4d53dd3d258c37a](https://github.com/d3stryr/UnrealEngine/commit/e534bbb47ccc30a79b32c8b1f4d53dd3d258c37a)
+- Source commit: [4a593025ba1f2f5cc2ccfc9c71a15ad9e08ff068](https://github.com/d3stryr/UnrealEngine/commit/4a593025ba1f2f5cc2ccfc9c71a15ad9e08ff068)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -18,7 +18,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
 | `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `4573061c1a0c08d2d4a3b6c4acd09ddf97109e2f` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, and command correlation API. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `9608f2ea6fbac2e2680750edfa15342235d406fe` | Added | Bounded per-thread events, active/destroyed identity retention, background binary journal, lifecycle history, failure reporting, and optional command-use capture. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `e0080f94a75e31f01055fc6dfd57afc5a08ae271` | Added | Bounded per-thread events, active/destroyed identity retention, background binary journal, lifecycle history, failure reporting, and optional command-use capture. |
 | `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `d8887be077f6050b54a3db0280127f0778e8e3ed` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture with resource/flags identity fields. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
@@ -103,6 +103,13 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - A full diagnostic PS5 rebuild is required because the instrumented `FRHIResource` layout and RHI module implementation changed.
 
 ## Change log
+
+### 2026-09-22 — Fix journal FEvent name collision
+
+- PS5 compilation showed that the recorder's internal `FEvent` history struct shadowed Unreal Core's global synchronization-event type.
+- Qualified the journal wake-event pointer as `::FEvent*`.
+- This resolves the repeated `Trigger`, `Wait`, `GetSynchEventFromPool`, and `ReturnSynchEventToPool` conversion/member errors.
+- Updated the complete mirrored `RHIResourceProvenance.cpp`.
 
 ### 2026-09-22 — Preserve active identities and add persistent journal
 
