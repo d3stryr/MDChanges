@@ -217,6 +217,7 @@ The original crash-time identity table could report `identity miss` after its ac
 ### Recorder changes
 
 - Added a separate fixed-capacity table of 4096 retained priority identities. A resource is promoted when a higher-level owner path or explicit diagnostic release marker is supplied. The table does not own or AddRef the RHI resource.
+- Each priority identity retains the four most recent owner-path associations independently, so the crash log can print the MPC instance, world, and collection paths instead of only the final path. Overflow is explicit in the per-path retained/total counts.
 - Added a 32768-entry bounded address-to-generation index. A new construction at the same address invalidates the old current-address mapping while all retained generations remain available for failure-time ambiguity reporting.
 - Added explicit counters for priority identity overflow, address-index overflow, selective stack capture count, and stack capture drops.
 - Added 16-PC raw stack captures for owner association, final reference release, completion of the C++ delete expression (`PhysicalFree`), first cached mesh-binding store, and the most recent bounded stale command enqueue/execute observations.

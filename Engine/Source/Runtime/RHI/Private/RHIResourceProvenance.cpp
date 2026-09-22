@@ -39,6 +39,7 @@ namespace
 	static constexpr uint32 PriorityAddressIndexCapacity = 32768;
 	static constexpr uint32 PriorityAddressProbeLimit = 64;
 	static constexpr uint32 StackFramesPerCapture = 16;
+	static constexpr uint32 PriorityOwnerPathCount = 4;
 	static constexpr uint32 MaxSelectiveCommandStackCaptures = 256;
 	static constexpr uint32 MaxDumpEvents = 256;
 	static constexpr uint32 JournalQueueCapacity = 16384;
@@ -181,6 +182,8 @@ namespace
 		TAtomicString<NameCapacity> DebugName;
 		TAtomicString<NameCapacity> OwnerName;
 		TAtomicString<PathCapacity> OwnerPath;
+		uint32 OwnerPathWriteIndex = 0;
+		TAtomicString<PathCapacity> OwnerPaths[PriorityOwnerPathCount];
 		TAtomicString<PathCapacity> LastMarker;
 		FStackCapture OwnerAssociationStack;
 		FStackCapture FinalReleaseStack;
@@ -1112,6 +1115,16 @@ namespace
 		ClaimedIdentity->DebugName.Set(DebugName);
 		ClaimedIdentity->OwnerName.Set(OwnerName);
 		ClaimedIdentity->OwnerPath.Set(OwnerPath);
+		ClaimedIdentity->OwnerPathWriteIndex = 0;
+		for (TAtomicString<PathCapacity>& RetainedPath : ClaimedIdentity->OwnerPaths)
+		{
+			RetainedPath.Set(nullptr);
+		}
+		if (OwnerPath[0] != 0)
+		{
+			ClaimedIdentity->OwnerPaths[0].Set(OwnerPath);
+			ClaimedIdentity->OwnerPathWriteIndex = 1;
+		}
 		ClaimedIdentity->LastMarker.Set(TEXT("owner association retained"));
 		ClaimedIdentity->OwnerAssociationStack = AssociationStack;
 		ClaimedIdentity->FinalReleaseStack = {};
@@ -1455,10 +1468,16 @@ namespace
 			TCHAR DebugName[NameCapacity] {};
 			TCHAR OwnerName[NameCapacity] {};
 			TCHAR OwnerPath[PathCapacity] {};
+			TCHAR OwnerPaths[PriorityOwnerPathCount][PathCapacity] {};
 			TCHAR LastMarker[PathCapacity] {};
 			Identity.DebugName.Get(DebugName);
 			Identity.OwnerName.Get(OwnerName);
 			Identity.OwnerPath.Get(OwnerPath);
+			for (uint32 PathIndex = 0; PathIndex < PriorityOwnerPathCount; ++PathIndex)
+			{
+				Identity.OwnerPaths[PathIndex].Get(OwnerPaths[PathIndex]);
+			}
+			const uint32 OwnerPathWriteIndex = Identity.OwnerPathWriteIndex;
 			Identity.LastMarker.Get(LastMarker);
 			const uint64 CreateCaller = Identity.CreateCaller.load(std::memory_order_relaxed);
 			const uint32 ResourceType = Identity.ResourceType.load(std::memory_order_relaxed);
@@ -1483,6 +1502,24 @@ namespace
 				OwnerName[0] ? OwnerName : TEXT("<missing>"),
 				OwnerPath[0] ? OwnerPath : TEXT("<missing>"),
 				LastMarker[0] ? LastMarker : TEXT("<missing>"));
+
+			const uint32 RetainedPathCount = OwnerPathWriteIndex < PriorityOwnerPathCount
+				? OwnerPathWriteIndex
+				: PriorityOwnerPathCount;
+			const uint32 FirstPathSequence = OwnerPathWriteIndex > PriorityOwnerPathCount
+				? OwnerPathWriteIndex - PriorityOwnerPathCount
+				: 0;
+			for (uint32 PathSequence = FirstPathSequence; PathSequence < OwnerPathWriteIndex; ++PathSequence)
+			{
+				const uint32 PathSlot = PathSequence % PriorityOwnerPathCount;
+				UE_LOG(LogRHI, Error,
+					TEXT("RHI provenance retained owner path: id=%llu sequence=%u retained=%u/%u path='%s'"),
+					static_cast<unsigned long long>(IdentityId),
+					PathSequence + 1,
+					RetainedPathCount,
+					OwnerPathWriteIndex,
+					OwnerPaths[PathSlot][0] ? OwnerPaths[PathSlot] : TEXT("<missing>"));
+			}
 
 			DumpPriorityStack(TEXT("owner-association"), EOperation::OwnerAssociation, IdentityId, OwnerAssociationStack);
 			DumpPriorityStack(TEXT("final-release"), EOperation::FinalRelease, IdentityId, FinalReleaseStack);
@@ -1861,6 +1898,18 @@ void SetOwnerPath(
 	CopyJournalText(JournalRecord, OwnerPath);
 	GJournalWriter.Enqueue(JournalRecord);
 
+	if (FPriorityIdentity* Identity = PromotePriorityIdentity(ResourceId, ResourceAddress, FlagsAddress, ResourceType))
+	{
+		LockPriorityIdentity(*Identity);
+		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+		{
+			Identity->OwnerPath.Set(OwnerPath);
+			const uint32 PathIndex = Identity->OwnerPathWriteIndex++;
+			Identity->OwnerPaths[PathIndex % PriorityOwnerPathCount].Set(OwnerPath);
+		}
+		UnlockPriorityIdentity(*Identity);
+	}
+
 	if (FIdentity* Identity = FindIdentity(ResourceId))
 	{
 		LockIdentity(*Identity);
@@ -1869,16 +1918,6 @@ void SetOwnerPath(
 			Identity->OwnerPath.Set(OwnerPath);
 		}
 		UnlockIdentity(*Identity);
-	}
-
-	if (FPriorityIdentity* Identity = PromotePriorityIdentity(ResourceId, ResourceAddress, FlagsAddress, ResourceType))
-	{
-		LockPriorityIdentity(*Identity);
-		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
-		{
-			Identity->OwnerPath.Set(OwnerPath);
-		}
-		UnlockPriorityIdentity(*Identity);
 	}
 }
 
