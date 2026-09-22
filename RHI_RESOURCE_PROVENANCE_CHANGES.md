@@ -226,6 +226,7 @@ The original crash-time identity table could report `identity miss` after its ac
 - Command-use rows now receive the retained resource ID, flags address, and type when the independent address index can resolve them. Raw pointers that were never promoted still correctly remain ID 0/type 255.
 - Added journal record kinds `StackFrame` and `Marker`, and operations `OwnerAssociation`, `ReleaseReason`, `BindingStore`, and `InvalidUse`. The decoder maps all of them. `packed` is the zero-based frame index for `StackFrame` rows.
 - Added `r.RHI.ResourceProvenance.PriorityStacks` (default 1). This diagnostic option enables the selective raw-PC captures; exact-build symbols are still required after capture.
+- The failure journal summary now prints the sampled `command_uses` and `priority_stacks` values, removing ambiguity about whether Rider launch arguments actually enabled the two diagnostic paths.
 
 ### Higher-level MPC and cached-binding instrumentation
 

@@ -2175,9 +2175,11 @@ void ReportInvalidAtomic(
 
 	const bool bJournalFlushed = GJournalWriter.FlushForFailure(1000);
 	UE_LOG(LogRHI, Error,
-		TEXT("RHI provenance journal: path='%s' failure_flush=%s queued=%llu drained=%llu bytes=%llu queue_drops=%llu disk_cap_drops=%llu write_failures=%llu disabled_or_start_failure_drops=%llu"),
+		TEXT("RHI provenance journal: path='%s' failure_flush=%s command_uses=%d priority_stacks=%d queued=%llu drained=%llu bytes=%llu queue_drops=%llu disk_cap_drops=%llu write_failures=%llu disabled_or_start_failure_drops=%llu"),
 		GJournalWriter.GetPath().IsEmpty() ? TEXT("<unavailable>") : *GJournalWriter.GetPath(),
 		bJournalFlushed ? TEXT("yes") : TEXT("no"),
+		CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread(),
+		CVarRHIResourceProvenancePriorityStacks.GetValueOnAnyThread(),
 		static_cast<unsigned long long>(GJournalWriter.GetQueuedRecords()),
 		static_cast<unsigned long long>(GJournalWriter.GetDrainedRecords()),
 		static_cast<unsigned long long>(GJournalWriter.GetBytesWritten()),
