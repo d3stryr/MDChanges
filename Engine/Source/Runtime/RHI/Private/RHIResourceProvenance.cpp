@@ -359,13 +359,13 @@ namespace
 
 			UE_LOG(LogRHI, Error,
 				TEXT("RHI provenance identity: id=%llu resource=%p flags=%p type=%u create_pc=0x%llx last_state=%s last_state_pc=0x%llx lifecycle_total=%u lifecycle_retained=%u lifecycle_omitted=%u debug='%s' owner='%s' owner_path='%s'"),
-				IdentityId,
+				static_cast<unsigned long long>(IdentityId),
 				reinterpret_cast<const void*>(IdentityResource),
 				reinterpret_cast<const void*>(IdentityFlags),
 				ResourceType,
-				CreateCaller,
+				static_cast<unsigned long long>(CreateCaller),
 				GetOperationName(LastOperation),
-				LastStateCaller,
+				static_cast<unsigned long long>(LastStateCaller),
 				LifecycleWriteIndex,
 				LifecycleEventCount,
 				LifecycleWriteIndex > LifecycleEventCount ? LifecycleWriteIndex - LifecycleEventCount : 0,
@@ -378,12 +378,12 @@ namespace
 				const FLifecycleEvent& Event = LifecycleEvents[LifecycleIndex];
 				UE_LOG(LogRHI, Error,
 					TEXT("RHI provenance lifecycle: identity_seq=%llu cycles=%llu thread=%u op=%s packed=0x%08x pc=0x%llx"),
-					Event.Sequence,
-					Event.Cycles,
+					static_cast<unsigned long long>(Event.Sequence),
+					static_cast<unsigned long long>(Event.Cycles),
 					Event.ThreadId,
 					GetOperationName(static_cast<EOperation>(Event.Operation)),
 					Event.PackedValue,
-					Event.CallerAddress);
+					static_cast<unsigned long long>(Event.CallerAddress));
 			}
 		}
 
@@ -451,29 +451,29 @@ namespace
 			const uint32 ResourceType = Event.OperationAndType >> 8;
 			UE_LOG(LogRHI, Error,
 				TEXT("RHI provenance event: thread_seq=%llu cycles=%llu thread=%u op=%s id=%llu resource=%p flags=%p type=%u packed=0x%08x pc=0x%llx correlation=%llu"),
-				Event.Sequence,
-				Event.Cycles,
+				static_cast<unsigned long long>(Event.Sequence),
+				static_cast<unsigned long long>(Event.Cycles),
 				Event.ThreadId,
 				GetOperationName(Operation),
-				Event.ResourceId,
+				static_cast<unsigned long long>(Event.ResourceId),
 				reinterpret_cast<const void*>(Event.ResourceAddress),
 				reinterpret_cast<const void*>(Event.FlagsAddress),
 				ResourceType,
 				Event.PackedValue,
-				Event.CallerAddress,
-				Event.CorrelationId);
+				static_cast<unsigned long long>(Event.CallerAddress),
+				static_cast<unsigned long long>(Event.CorrelationId));
 		}
 
 		UE_LOG(LogRHI, Error,
 			TEXT("RHI provenance coverage: retained_matching_events=%u total_matching_events=%llu matching_events_omitted=%llu thread_buffers=%u/%u thread_buffer_overflows=%llu overwritten_events_all_threads=%llu identity_evictions=%llu."),
 			MatchCount,
-			TotalMatches,
-			TotalMatches > MatchCount ? TotalMatches - MatchCount : 0,
+			static_cast<unsigned long long>(TotalMatches),
+			static_cast<unsigned long long>(TotalMatches > MatchCount ? TotalMatches - MatchCount : 0),
 			ClaimedBuffers,
 			ThreadBufferCount,
-			GThreadBufferOverflows.load(std::memory_order_relaxed),
-			TotalOverwritten,
-			GIdentityEvictions.load(std::memory_order_relaxed));
+			static_cast<unsigned long long>(GThreadBufferOverflows.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(TotalOverwritten),
+			static_cast<unsigned long long>(GIdentityEvictions.load(std::memory_order_relaxed)));
 	}
 }
 
@@ -656,10 +656,10 @@ void ReportInvalidAtomic(
 		Reason,
 		ResourceAddress,
 		FlagsAddress,
-		ObservedResourceId,
+		static_cast<unsigned long long>(ObservedResourceId),
 		ObservedResourceType,
 		OldPacked,
-		CallerAddress);
+		static_cast<unsigned long long>(CallerAddress));
 
 	DumpIdentityMatches(ResourceAddress, FlagsAddress, ObservedResourceId);
 	DumpEventMatches(ResourceAddress, FlagsAddress, ObservedResourceId);
