@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [fd8143544ee19114eb2c3c4693927eb2c9e7c5c5](https://github.com/d3stryr/UnrealEngine/commit/fd8143544ee19114eb2c3c4693927eb2c9e7c5c5)
+- Source commit: [8736eedc0f700a917059968c1b69c63045034340](https://github.com/d3stryr/UnrealEngine/commit/8736eedc0f700a917059968c1b69c63045034340)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -24,6 +24,8 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
 | `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `f5aa614302a7a67b93f3921a90006c3e58db1330` | Added | Streams and filters `.rhiprov` journals by generation ID, resource address, or flags address and emits readable TSV. |
+| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `1ed7eec251a8e57a4b0ce4afd9ed2a1da7cfd649` | Modified | Carries copied collection, transient instance, and world paths through diagnostic MPC update commands. |
+| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `59ff54bdbe15d4a686275d24c546ac8e3c3da41a` | Modified | Captures UObject paths on the game thread and associates them with each newly created MPC uniform-buffer generation. |
 
 ## Current behavior
 
@@ -43,6 +45,7 @@ It records:
 - address-reuse ambiguity;
 - active-table overflow, destroyed-history eviction, event overwrite, journal queue-drop, disk-cap, flush, and write-failure counters;
 - available debug names, owner names, and externally supplied owner paths;
+- Material Parameter Collection uniform-buffer generations receive labeled `Collection=`, `Instance=`, and `World=` path records copied on the game thread; the collection path is retained in the bounded failure-time identity;
 - a bounded append-only binary journal written by a below-normal-priority background thread.
 
 Selected command-use tracing is disabled by default. Enable it with:
@@ -78,6 +81,8 @@ python Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py <journal.rhiprov> 
 
 The assertion path requests a full journal flush for up to one second and reports the resolved path, queued/drained counts, bytes written, queue drops, disk-cap drops, write failures, and startup failures.
 
+For an instrumented Material Parameter Collection generation, the decoded TSV contains three labeled `OwnerPath` records (`Instance=`, `World=`, and `Collection=`). The collection record is written last so `owner_path` in the bounded crash-time identity resolves to the asset path when it fits the retained path capacity.
+
 A `PhysicalFree` event means the C++ delete expression completed. Memory Insights remains the authoritative source for allocation/free stacks and containing allocation ranges.
 
 ## Storage limits
@@ -100,9 +105,21 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - Preprocessor and delimiter balance checks passed.
 - The first recorder revision compiled and executed on PS5, captured the `0xDD` failure, and recovered a prior valid type-18 generation at the same resource/flags addresses.
 - The active/destroyed identity and persistent-journal revision has passed source/mirror equality, delimiter/preprocessor balance, and Python decoder syntax checks, but has not yet been compiled with the PS5 SDK/toolchain.
+- The MPC owner-association revision passed source delimiter/preprocessor checks. Its two complete files are mirrored, but the revision has not yet been compiled with the PS5 SDK/toolchain.
 - A full diagnostic PS5 rebuild is required because the instrumented `FRHIResource` layout and RHI module implementation changed.
 
 ## Change log
+
+### 2026-09-22 — Associate MPC uniform buffers with UObject paths
+
+- Identified the failed generation as `MaterialParameterCollectionInstanceResource` and the stale access as a uniform-buffer bind during deferred `FRHICommandSetShaderParameters` execution.
+- At `UMaterialParameterCollectionInstance::DeferredUpdateRenderState`, copy `Collection->GetPathName()`, the instance `GetPathName()`, and `World->GetPathName()` while those UObjects are valid on the game thread.
+- Carry the copied strings by value through `UpdateCollectionCommand`; render/RHI code never dereferences a UObject to obtain provenance.
+- Associate the three labeled paths only when a new or recreated `FUniformBufferRHIRef` generation is created, avoiding metadata work on ordinary in-place MPC updates.
+- Journal paths in `Instance=`, `World=`, `Collection=` order. The collection is stored last so the bounded destroyed identity reports the actionable asset path, while the persistent journal retains all three labeled records.
+- Cover default collection resources with `Instance=<default-resource>` and `World=<none>`.
+- Guard the additional parameters and work with `RHI_RESOURCE_PROVENANCE_ENABLED`, leaving Test and Shipping signatures/behavior unchanged.
+- Added complete mirrored copies of `ParameterCollection.h` and `ParameterCollection.cpp`.
 
 ### 2026-09-22 — Raise persistent journal cap to 10 GiB
 
