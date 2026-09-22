@@ -207,7 +207,11 @@ private:
 			}
 			checkf((OldPacked & DeletingBit) == 0,
 				TEXT("Resource is being deleted. Resource=%p Flags=%p ProvenanceId=%llu OldPacked=0x%08x CallerPC=0x%llx"),
-				ResourceAddress, this, ResourceId, OldPacked, CallerAddress);
+				ResourceAddress,
+				this,
+				static_cast<unsigned long long>(ResourceId),
+				OldPacked,
+				static_cast<unsigned long long>(CallerAddress));
 #else
 			checkf((OldPacked & DeletingBit) == 0, TEXT("Resource is being deleted."));
 #endif
@@ -237,7 +241,11 @@ private:
 			}
 			checkf((OldPacked & DeletingBit) == 0,
 				TEXT("Resource is being deleted. Resource=%p Flags=%p ProvenanceId=%llu OldPacked=0x%08x CallerPC=0x%llx"),
-				ResourceAddress, this, ResourceId, OldPacked, CallerAddress);
+				ResourceAddress,
+				this,
+				static_cast<unsigned long long>(ResourceId),
+				OldPacked,
+				static_cast<unsigned long long>(CallerAddress));
 #else
 			checkf((OldPacked & DeletingBit) == 0, TEXT("Resource is being deleted."));
 #endif
