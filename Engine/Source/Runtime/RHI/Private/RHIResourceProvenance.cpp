@@ -165,7 +165,8 @@ namespace
 		DebugName = 2,
 		OwnerName = 3,
 		OwnerPath = 4,
-		Lifecycle = 5
+		Lifecycle = 5,
+		CommandUse = 6
 	};
 
 	enum class EJournalRecordFlags : uint16
@@ -709,7 +710,7 @@ namespace
 		return Record;
 	}
 
-	bool IsJournaledLifecycleOperation(EOperation Operation)
+	bool IsJournaledOperation(EOperation Operation)
 	{
 		switch (Operation)
 		{
@@ -722,9 +723,29 @@ namespace
 		case EOperation::DeleteCancelled:
 		case EOperation::DestructorBegin:
 		case EOperation::PhysicalFree:
+		case EOperation::CommandEnqueue:
+		case EOperation::CommandExecute:
+		case EOperation::UpdateRequest:
+		case EOperation::UpdateExecute:
 			return true;
 		default:
 			return false;
+		}
+	}
+
+	EJournalRecordKind GetJournalRecordKind(EOperation Operation)
+	{
+		switch (Operation)
+		{
+		case EOperation::Create:
+			return EJournalRecordKind::Create;
+		case EOperation::CommandEnqueue:
+		case EOperation::CommandExecute:
+		case EOperation::UpdateRequest:
+		case EOperation::UpdateExecute:
+			return EJournalRecordKind::CommandUse;
+		default:
+			return EJournalRecordKind::Lifecycle;
 		}
 	}
 
@@ -1355,10 +1376,10 @@ void Record(
 		break;
 	}
 
-	if (IsJournaledLifecycleOperation(Operation))
+	if (IsJournaledOperation(Operation))
 	{
 		GJournalWriter.Enqueue(MakeJournalRecord(
-			Operation == EOperation::Create ? EJournalRecordKind::Create : EJournalRecordKind::Lifecycle,
+			GetJournalRecordKind(Operation),
 			Operation,
 			ResourceAddress,
 			FlagsAddress,
