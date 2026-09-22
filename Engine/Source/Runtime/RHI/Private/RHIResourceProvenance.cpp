@@ -53,7 +53,7 @@ namespace
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceJournalMaxMB(
 		TEXT("r.RHI.ResourceProvenance.JournalMaxMB"),
-		1024,
+		10240,
 		TEXT("Maximum size in MiB of the RHI resource provenance journal. Sampled when the journal starts."),
 		ECVF_Default);
 
@@ -470,7 +470,7 @@ namespace
 			const int32 MaximumMiB = FMath::Clamp(
 				CVarRHIResourceProvenanceJournalMaxMB.GetValueOnAnyThread(),
 				16,
-				4096);
+				16384);
 			MaximumFileBytes = static_cast<uint64>(MaximumMiB) * 1024ull * 1024ull;
 
 			IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
