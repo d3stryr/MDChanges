@@ -28,6 +28,7 @@ KIND_NAMES = {
     3: "OwnerName",
     4: "OwnerPath",
     5: "Lifecycle",
+    6: "CommandUse",
 }
 
 OPERATION_NAMES = {
