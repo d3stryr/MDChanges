@@ -164,6 +164,17 @@ public:
 	{
 		UE::RHI::ResourceProvenance::SetOwnerPath(ProvenanceId, this, &AtomicFlags, static_cast<uint8>(ResourceType), InOwnerPath);
 	}
+
+	inline void RecordProvenanceReleaseReason(const TCHAR* InReason) const
+	{
+		UE::RHI::ResourceProvenance::RecordMarker(
+			UE::RHI::ResourceProvenance::EOperation::ReleaseReason,
+			ProvenanceId,
+			this,
+			&AtomicFlags,
+			static_cast<uint8>(ResourceType),
+			InReason);
+	}
 #endif
 
 #if RHI_ENABLE_RESOURCE_INFO

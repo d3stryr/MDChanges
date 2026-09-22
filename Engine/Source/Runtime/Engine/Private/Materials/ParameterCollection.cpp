@@ -1213,6 +1213,12 @@ void FMaterialParameterCollectionInstanceResource::GameThread_Destroy()
 		{
 			// Async RDG tasks can call FMaterialShader::SetParameters which touch material parameter collections.
 			FRDGBuilder::WaitForAsyncExecuteTask();
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+			if (Resource->UniformBuffer.IsValid())
+			{
+				Resource->UniformBuffer->RecordProvenanceReleaseReason(TEXT("MPC GameThread_Destroy SafeRelease"));
+			}
+#endif
 			Resource->UniformBuffer.SafeRelease();
 
 			// FRHIUniformBuffer instances take raw pointers to the layout struct.
@@ -1251,6 +1257,15 @@ void FMaterialParameterCollectionInstanceResource::UpdateContents(const FGuid& I
 		}
 		else
 		{
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+			if (UniformBuffer.IsValid())
+			{
+				UniformBuffer->RecordProvenanceReleaseReason(
+					bRecreateUniformBuffer
+						? TEXT("MPC UpdateContents replacing existing uniform buffer: bRecreateUniformBuffer=true")
+						: TEXT("MPC UpdateContents replacing existing uniform buffer: existing buffer invalid"));
+			}
+#endif
 			FRHIUniformBufferLayoutInitializer UniformBufferLayoutInitializer(TEXT("MaterialParameterCollectionInstanceResource"));
 			UniformBufferLayoutInitializer.ConstantBufferSize = NewSize;
 			UniformBufferLayoutInitializer.ComputeHash();

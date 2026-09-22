@@ -207,3 +207,53 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 ## Synchronization rule
 
 Whenever the diagnostic implementation changes in `d3stryr/UnrealEngine`, update the corresponding complete file in this repository and append a dated entry here. Update the source commit and blob hashes so the mirror can be audited against the engine branch.
+
+## 2026-09-22: retained identity, selective stacks, stale-command origin, and MPC release reasons
+
+### Why this change was needed
+
+The original crash-time identity table could report `identity miss` after its active table overflowed or its destroyed-history ring evicted the matching generation. The persistent journal still recovered the resource offline, but the assertion log could not print the name, owner, or lifecycle immediately. A single caller PC also could not distinguish the resource creator, final releaser, cached-binding producer, command producer, and invalid AddRef consumer.
+
+### Recorder changes
+
+- Added a separate fixed-capacity table of 4096 retained priority identities. A resource is promoted when a higher-level owner path or explicit diagnostic release marker is supplied. The table does not own or AddRef the RHI resource.
+- Added a 32768-entry bounded address-to-generation index. A new construction at the same address invalidates the old current-address mapping while all retained generations remain available for failure-time ambiguity reporting.
+- Added explicit counters for priority identity overflow, address-index overflow, selective stack capture count, and stack capture drops.
+- Added 16-PC raw stack captures for owner association, final reference release, completion of the C++ delete expression (`PhysicalFree`), first cached mesh-binding store, and the most recent bounded stale command enqueue/execute observations.
+- Stale command stack walks are capped at 256 for the run. Once exhausted, the recorder reports drops rather than continuing unbounded work.
+- `ReportInvalidAtomic` now captures and journals the complete invalid-use CPU stack, recovers the retained generation without dereferencing the dead object, and attaches the last command-execute correlation seen for that resource on the failing thread.
+- Command-use rows now receive the retained resource ID, flags address, and type when the independent address index can resolve them. Raw pointers that were never promoted still correctly remain ID 0/type 255.
+- Added journal record kinds `StackFrame` and `Marker`, and operations `OwnerAssociation`, `ReleaseReason`, `BindingStore`, and `InvalidUse`. The decoder maps all of them. `packed` is the zero-based frame index for `StackFrame` rows.
+- Added `r.RHI.ResourceProvenance.PriorityStacks` (default 1). This diagnostic option enables the selective raw-PC captures; exact-build symbols are still required after capture.
+
+### Higher-level MPC and cached-binding instrumentation
+
+- `FMeshDrawSingleShaderBindings::Add(..., const FRHIUniformBuffer*)` reports a compact `BindingStore` only when the resource is in the retained priority table. The first such store also gets a stack. This identifies the code path that copied an owner-associated uniform-buffer raw pointer into cached mesh draw bindings.
+- `FMaterialParameterCollectionInstanceResource::UpdateContents` records a release reason before replacing an existing uniform buffer.
+- `FMaterialParameterCollectionInstanceResource::GameThread_Destroy` records a release reason before `SafeRelease`.
+- `FScene::UpdateParameterCollections` records a release reason for owning scene-map references immediately before the map is emptied.
+- These markers are emitted while a valid owning reference still exists. They never call `GetPathName` or dereference the RHI resource after final release.
+
+### Files modified in this revision
+
+- `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h`
+- `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp`
+- `Engine/Source/Runtime/RHI/Public/RHIResources.h`
+- `Engine/Source/Runtime/Renderer/Public/MeshDrawShaderBindings.h`
+- `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp`
+- `Engine/Source/Runtime/Renderer/Private/RendererScene.cpp`
+- `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py`
+
+### Interpretation and current engine hypothesis
+
+The recovered object is the per-world `MaterialParameterCollectionInstanceResource` uniform buffer for `MPC_GlobalEnvironment`. UE 5.8.2's scene parameter-collection map owns `FUniformBufferRHIRef` references, but `FMeshDrawShaderBindings` stores plain `FRHIUniformBuffer*` values. The MPC update/destroy paths wait for asynchronous RDG execution before replacing or releasing the buffer, but that wait does not itself prove that persistent cached mesh draw bindings were rebuilt or invalidated. The current leading engine-level hypothesis is therefore a stale raw uniform-buffer pointer retained in cached mesh draw bindings across MPC buffer replacement, instance destruction, or scene-map refresh. It is not yet proven; the new `BindingStore`, release-reason, command-correlation, and stack records are intended to distinguish that path from project code, custom renderer code, world teardown, or an unrelated overwrite.
+
+Do not treat `PhysicalFree` as an allocator-level free stack. It is recorded after the C++ `delete Resource` expression completes. Use a same-run Memory Insights trace from process startup to obtain the underlying CPU allocation and free callstacks and match the pointer against containing allocation ranges and historical generations.
+
+### Run settings for the next repro
+
+Keep the existing trace host arguments and add:
+
+`-ExecCmds="r.RHI.ResourceProvenance.CommandUses 1,r.RHI.ResourceProvenance.PriorityStacks 1,r.RHI.ResourceProvenance.Journal 1,r.RHI.ResourceProvenance.JournalMaxMB 10240" -trace=default,memory,module,metadata,assetmetadata,log`
+
+The memory trace must be active at process startup. After the crash, decode by the recovered resource address and inspect `Marker`, `BindingStore`, `CommandUse`, and `StackFrame` rows. Correlate `CommandEnqueue`, `CommandExecute`, and `InvalidUse` by `correlation`; resolve each `caller` PC using symbols from that exact executable build.

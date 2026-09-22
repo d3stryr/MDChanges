@@ -33,7 +33,11 @@ namespace UE::RHI::ResourceProvenance
 		CommandExecute,
 		UpdateRequest,
 		UpdateExecute,
-		ExternalUse
+		ExternalUse,
+		OwnerAssociation,
+		ReleaseReason,
+		BindingStore,
+		InvalidUse
 	};
 
 	FORCEINLINE uint64 CaptureCallerAddress()
@@ -72,6 +76,14 @@ namespace UE::RHI::ResourceProvenance
 		uint8 ResourceType,
 		const TCHAR* OwnerPath);
 
+	RHI_API void RecordMarker(
+		EOperation Operation,
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		const void* FlagsAddress,
+		uint8 ResourceType,
+		const TCHAR* Text);
+
 	RHI_API void Record(
 		EOperation Operation,
 		const void* ResourceAddress,
@@ -84,6 +96,7 @@ namespace UE::RHI::ResourceProvenance
 
 	RHI_API uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CallerAddress);
 	RHI_API void RecordCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CorrelationId, uint64 CallerAddress);
+	RHI_API void RecordBindingStore(const void* ResourceAddress, uint64 CallerAddress);
 
 	RHI_API void ReportInvalidAtomic(
 		const TCHAR* Reason,

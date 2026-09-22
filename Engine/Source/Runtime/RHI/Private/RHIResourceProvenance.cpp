@@ -10,6 +10,7 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/PlatformStackWalk.h"
 #include "HAL/PlatformTLS.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/Runnable.h"
@@ -33,6 +34,12 @@ namespace
 	static constexpr uint32 NameCapacity = 64;
 	static constexpr uint32 PathCapacity = 96;
 	static constexpr uint32 LifecycleEventsPerIdentity = 8;
+	static constexpr uint32 PriorityIdentityCapacity = 4096;
+	static constexpr uint32 PriorityIdentityProbeLimit = 64;
+	static constexpr uint32 PriorityAddressIndexCapacity = 32768;
+	static constexpr uint32 PriorityAddressProbeLimit = 64;
+	static constexpr uint32 StackFramesPerCapture = 16;
+	static constexpr uint32 MaxSelectiveCommandStackCaptures = 256;
 	static constexpr uint32 MaxDumpEvents = 256;
 	static constexpr uint32 JournalQueueCapacity = 16384;
 	static constexpr uint32 JournalTextCapacity = 256;
@@ -43,6 +50,8 @@ namespace
 	static_assert((EventsPerThread & (EventsPerThread - 1)) == 0, "EventsPerThread must be a power of two.");
 	static_assert((IdentityCapacity & (IdentityCapacity - 1)) == 0, "IdentityCapacity must be a power of two.");
 	static_assert((DestroyedIdentityCapacity & (DestroyedIdentityCapacity - 1)) == 0, "DestroyedIdentityCapacity must be a power of two.");
+	static_assert((PriorityIdentityCapacity & (PriorityIdentityCapacity - 1)) == 0, "PriorityIdentityCapacity must be a power of two.");
+	static_assert((PriorityAddressIndexCapacity & (PriorityAddressIndexCapacity - 1)) == 0, "PriorityAddressIndexCapacity must be a power of two.");
 	static_assert((JournalQueueCapacity & (JournalQueueCapacity - 1)) == 0, "JournalQueueCapacity must be a power of two.");
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceJournal(
@@ -55,6 +64,12 @@ namespace
 		TEXT("r.RHI.ResourceProvenance.JournalMaxMB"),
 		10240,
 		TEXT("Maximum size in MiB of the RHI resource provenance journal. Sampled when the journal starts."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarRHIResourceProvenancePriorityStacks(
+		TEXT("r.RHI.ResourceProvenance.PriorityStacks"),
+		1,
+		TEXT("Captures bounded raw call stacks for owner-associated RHI resources and stale command uses."),
 		ECVF_Default);
 
 	struct FEvent
@@ -145,6 +160,42 @@ namespace
 		TAtomicString<PathCapacity> OwnerPath;
 	};
 
+	struct FStackCapture
+	{
+		uint64 Cycles = 0;
+		uint64 CorrelationId = 0;
+		uint32 ThreadId = 0;
+		uint32 FrameCount = 0;
+		uint64 Frames[StackFramesPerCapture] {};
+	};
+
+	struct FPriorityIdentity
+	{
+		mutable std::atomic_flag Writer = ATOMIC_FLAG_INIT;
+		std::atomic<uint64> ResourceId { 0 };
+		std::atomic<uint64> ResourceAddress { 0 };
+		std::atomic<uint64> FlagsAddress { 0 };
+		std::atomic<uint64> CreateCaller { 0 };
+		std::atomic<uint32> ResourceType { 0 };
+		std::atomic<uint32> LastOperation { 0 };
+		TAtomicString<NameCapacity> DebugName;
+		TAtomicString<NameCapacity> OwnerName;
+		TAtomicString<PathCapacity> OwnerPath;
+		TAtomicString<PathCapacity> LastMarker;
+		FStackCapture OwnerAssociationStack;
+		FStackCapture FinalReleaseStack;
+		FStackCapture PhysicalFreeStack;
+		FStackCapture BindingStoreStack;
+		FStackCapture StaleEnqueueStack;
+		FStackCapture StaleExecuteStack;
+	};
+
+	struct FPriorityAddressEntry
+	{
+		std::atomic<uint64> ResourceAddress { 0 };
+		std::atomic<uint64> ResourceId { 0 };
+	};
+
 	struct FDumpEvent
 	{
 		uint64 Sequence = 0;
@@ -166,7 +217,9 @@ namespace
 		OwnerName = 3,
 		OwnerPath = 4,
 		Lifecycle = 5,
-		CommandUse = 6
+		CommandUse = 6,
+		StackFrame = 7,
+		Marker = 8
 	};
 
 	enum class EJournalRecordFlags : uint16
@@ -727,6 +780,7 @@ namespace
 		case EOperation::CommandExecute:
 		case EOperation::UpdateRequest:
 		case EOperation::UpdateExecute:
+		case EOperation::BindingStore:
 			return true;
 		default:
 			return false;
@@ -743,6 +797,7 @@ namespace
 		case EOperation::CommandExecute:
 		case EOperation::UpdateRequest:
 		case EOperation::UpdateExecute:
+		case EOperation::BindingStore:
 			return EJournalRecordKind::CommandUse;
 		default:
 			return EJournalRecordKind::Lifecycle;
@@ -752,6 +807,8 @@ namespace
 	FThreadBuffer GThreadBuffers[ThreadBufferCount];
 	FIdentity GIdentities[IdentityCapacity];
 	FIdentity GDestroyedIdentities[DestroyedIdentityCapacity];
+	FPriorityIdentity GPriorityIdentities[PriorityIdentityCapacity];
+	FPriorityAddressEntry GPriorityAddressIndex[PriorityAddressIndexCapacity];
 
 	std::atomic<uint32> GNextThreadBuffer { 0 };
 	std::atomic<uint64> GNextResourceId { 1 };
@@ -759,9 +816,15 @@ namespace
 	std::atomic<uint64> GThreadBufferOverflows { 0 };
 	std::atomic<uint64> GActiveIdentityOverflows { 0 };
 	std::atomic<uint64> GDestroyedIdentityEvictions { 0 };
+	std::atomic<uint64> GPriorityIdentityOverflows { 0 };
+	std::atomic<uint64> GPriorityAddressIndexOverflows { 0 };
+	std::atomic<uint64> GSelectiveCommandStackCaptures { 0 };
+	std::atomic<uint64> GSelectiveCommandStackDrops { 0 };
 
 	thread_local int32 GTlsThreadBufferIndex = -2;
 	thread_local uint32 GTlsCommandSequence = 0;
+	thread_local uint64 GTlsLastExecuteCorrelation = 0;
+	thread_local uint64 GTlsLastExecuteResourceAddress = 0;
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceCommandUses(
 		TEXT("r.RHI.ResourceProvenance.CommandUses"),
@@ -790,6 +853,10 @@ namespace
 		case EOperation::UpdateRequest:             return TEXT("UpdateRequest");
 		case EOperation::UpdateExecute:             return TEXT("UpdateExecute");
 		case EOperation::ExternalUse:               return TEXT("ExternalUse");
+		case EOperation::OwnerAssociation:          return TEXT("OwnerAssociation");
+		case EOperation::ReleaseReason:             return TEXT("ReleaseReason");
+		case EOperation::BindingStore:              return TEXT("BindingStore");
+		case EOperation::InvalidUse:                return TEXT("InvalidUse");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -824,6 +891,365 @@ namespace
 	void UnlockIdentity(FIdentity& Identity)
 	{
 		Identity.Writer.clear(std::memory_order_release);
+	}
+
+	uint32 HashPriorityValue(uint64 Value, uint32 Mask)
+	{
+		Value ^= Value >> 33;
+		Value *= 0xff51afd7ed558ccdULL;
+		Value ^= Value >> 33;
+		return static_cast<uint32>(Value) & Mask;
+	}
+
+	void LockPriorityIdentity(FPriorityIdentity& Identity)
+	{
+		while (Identity.Writer.test_and_set(std::memory_order_acquire))
+		{
+			FPlatformProcess::YieldThread();
+		}
+	}
+
+	void UnlockPriorityIdentity(FPriorityIdentity& Identity)
+	{
+		Identity.Writer.clear(std::memory_order_release);
+	}
+
+	FPriorityIdentity* FindPriorityIdentity(uint64 ResourceId)
+	{
+		if (ResourceId == 0 || ResourceId == ReservedIdentityId)
+		{
+			return nullptr;
+		}
+
+		const uint32 StartIndex = HashPriorityValue(ResourceId, PriorityIdentityCapacity - 1);
+		for (uint32 Probe = 0; Probe < PriorityIdentityProbeLimit; ++Probe)
+		{
+			FPriorityIdentity& Identity = GPriorityIdentities[(StartIndex + Probe) & (PriorityIdentityCapacity - 1)];
+			const uint64 CandidateId = Identity.ResourceId.load(std::memory_order_acquire);
+			if (CandidateId == ResourceId)
+			{
+				return &Identity;
+			}
+			if (CandidateId == 0)
+			{
+				return nullptr;
+			}
+		}
+		return nullptr;
+	}
+
+	FStackCapture CaptureRawStack()
+	{
+		FStackCapture Result;
+		if (CVarRHIResourceProvenancePriorityStacks.GetValueOnAnyThread() != 0)
+		{
+			Result.Cycles = FPlatformTime::Cycles64();
+			Result.ThreadId = FPlatformTLS::GetCurrentThreadId();
+			Result.FrameCount = FPlatformStackWalk::CaptureStackBackTrace(Result.Frames, StackFramesPerCapture);
+		}
+		return Result;
+	}
+
+	void JournalStack(
+		EOperation Operation,
+		uint64 ResourceId,
+		uint64 ResourceAddress,
+		uint64 FlagsAddress,
+		uint8 ResourceType,
+		const FStackCapture& Stack)
+	{
+		for (uint32 FrameIndex = 0; FrameIndex < Stack.FrameCount; ++FrameIndex)
+		{
+			GJournalWriter.Enqueue(MakeJournalRecord(
+				EJournalRecordKind::StackFrame,
+				Operation,
+				reinterpret_cast<const void*>(ResourceAddress),
+				reinterpret_cast<const void*>(FlagsAddress),
+				ResourceId,
+				ResourceType,
+				FrameIndex,
+				Stack.Frames[FrameIndex],
+				Stack.CorrelationId));
+		}
+	}
+
+	void ClearPriorityAddressForNewGeneration(uint64 ResourceAddress)
+	{
+		if (ResourceAddress == 0)
+		{
+			return;
+		}
+
+		const uint32 StartIndex = HashPriorityValue(ResourceAddress >> 4, PriorityAddressIndexCapacity - 1);
+		for (uint32 Probe = 0; Probe < PriorityAddressProbeLimit; ++Probe)
+		{
+			FPriorityAddressEntry& Entry = GPriorityAddressIndex[(StartIndex + Probe) & (PriorityAddressIndexCapacity - 1)];
+			const uint64 CandidateAddress = Entry.ResourceAddress.load(std::memory_order_acquire);
+			if (CandidateAddress == ResourceAddress)
+			{
+				// Keep the key as a tombstone so lock-free probing is not broken.
+				Entry.ResourceId.store(0, std::memory_order_release);
+				return;
+			}
+			if (CandidateAddress == 0)
+			{
+				return;
+			}
+		}
+	}
+
+	void IndexPriorityAddress(uint64 ResourceAddress, uint64 ResourceId)
+	{
+		const uint32 StartIndex = HashPriorityValue(ResourceAddress >> 4, PriorityAddressIndexCapacity - 1);
+		for (uint32 Probe = 0; Probe < PriorityAddressProbeLimit; ++Probe)
+		{
+			FPriorityAddressEntry& Entry = GPriorityAddressIndex[(StartIndex + Probe) & (PriorityAddressIndexCapacity - 1)];
+			uint64 CandidateAddress = Entry.ResourceAddress.load(std::memory_order_acquire);
+			if (CandidateAddress == ResourceAddress)
+			{
+				Entry.ResourceId.store(ResourceId, std::memory_order_release);
+				return;
+			}
+			if (CandidateAddress == 0 && Entry.ResourceAddress.compare_exchange_strong(
+				CandidateAddress,
+				ResourceAddress,
+				std::memory_order_acq_rel,
+				std::memory_order_relaxed))
+			{
+				Entry.ResourceId.store(ResourceId, std::memory_order_release);
+				return;
+			}
+		}
+		GPriorityAddressIndexOverflows.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	uint64 FindPriorityIdByAddress(uint64 ResourceAddress)
+	{
+		if (ResourceAddress == 0)
+		{
+			return 0;
+		}
+
+		const uint32 StartIndex = HashPriorityValue(ResourceAddress >> 4, PriorityAddressIndexCapacity - 1);
+		for (uint32 Probe = 0; Probe < PriorityAddressProbeLimit; ++Probe)
+		{
+			const FPriorityAddressEntry& Entry = GPriorityAddressIndex[(StartIndex + Probe) & (PriorityAddressIndexCapacity - 1)];
+			const uint64 CandidateAddress = Entry.ResourceAddress.load(std::memory_order_acquire);
+			if (CandidateAddress == ResourceAddress)
+			{
+				return Entry.ResourceId.load(std::memory_order_acquire);
+			}
+			if (CandidateAddress == 0)
+			{
+				return 0;
+			}
+		}
+		return 0;
+	}
+
+	FPriorityIdentity* PromotePriorityIdentity(
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		const void* FlagsAddress,
+		uint8 ResourceType)
+	{
+		if (FPriorityIdentity* Existing = FindPriorityIdentity(ResourceId))
+		{
+			return Existing;
+		}
+
+		TCHAR DebugName[NameCapacity] {};
+		TCHAR OwnerName[NameCapacity] {};
+		TCHAR OwnerPath[PathCapacity] {};
+		uint64 CreateCaller = 0;
+		if (FIdentity* Source = FindIdentity(ResourceId))
+		{
+			LockIdentity(*Source);
+			if (Source->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+			{
+				Source->DebugName.Get(DebugName);
+				Source->OwnerName.Get(OwnerName);
+				Source->OwnerPath.Get(OwnerPath);
+				CreateCaller = Source->CreateCaller.load(std::memory_order_relaxed);
+			}
+			UnlockIdentity(*Source);
+		}
+
+		FStackCapture AssociationStack = CaptureRawStack();
+		const uint32 StartIndex = HashPriorityValue(ResourceId, PriorityIdentityCapacity - 1);
+		FPriorityIdentity* ClaimedIdentity = nullptr;
+		for (uint32 Probe = 0; Probe < PriorityIdentityProbeLimit; ++Probe)
+		{
+			FPriorityIdentity& Candidate = GPriorityIdentities[(StartIndex + Probe) & (PriorityIdentityCapacity - 1)];
+			uint64 ExpectedId = 0;
+			if (Candidate.ResourceId.compare_exchange_strong(
+				ExpectedId,
+				ReservedIdentityId,
+				std::memory_order_acq_rel,
+				std::memory_order_relaxed))
+			{
+				ClaimedIdentity = &Candidate;
+				break;
+			}
+			if (ExpectedId == ResourceId)
+			{
+				return &Candidate;
+			}
+		}
+
+		if (!ClaimedIdentity)
+		{
+			GPriorityIdentityOverflows.fetch_add(1, std::memory_order_relaxed);
+			return nullptr;
+		}
+
+		LockPriorityIdentity(*ClaimedIdentity);
+		ClaimedIdentity->ResourceAddress.store(reinterpret_cast<uint64>(ResourceAddress), std::memory_order_relaxed);
+		ClaimedIdentity->FlagsAddress.store(reinterpret_cast<uint64>(FlagsAddress), std::memory_order_relaxed);
+		ClaimedIdentity->CreateCaller.store(CreateCaller, std::memory_order_relaxed);
+		ClaimedIdentity->ResourceType.store(ResourceType, std::memory_order_relaxed);
+		ClaimedIdentity->LastOperation.store(static_cast<uint32>(EOperation::OwnerAssociation), std::memory_order_relaxed);
+		ClaimedIdentity->DebugName.Set(DebugName);
+		ClaimedIdentity->OwnerName.Set(OwnerName);
+		ClaimedIdentity->OwnerPath.Set(OwnerPath);
+		ClaimedIdentity->LastMarker.Set(TEXT("owner association retained"));
+		ClaimedIdentity->OwnerAssociationStack = AssociationStack;
+		ClaimedIdentity->FinalReleaseStack = {};
+		ClaimedIdentity->PhysicalFreeStack = {};
+		ClaimedIdentity->BindingStoreStack = {};
+		ClaimedIdentity->StaleEnqueueStack = {};
+		ClaimedIdentity->StaleExecuteStack = {};
+		ClaimedIdentity->ResourceId.store(ResourceId, std::memory_order_release);
+		UnlockPriorityIdentity(*ClaimedIdentity);
+
+		IndexPriorityAddress(reinterpret_cast<uint64>(ResourceAddress), ResourceId);
+		JournalStack(
+			EOperation::OwnerAssociation,
+			ResourceId,
+			reinterpret_cast<uint64>(ResourceAddress),
+			reinterpret_cast<uint64>(FlagsAddress),
+			ResourceType,
+			AssociationStack);
+		return ClaimedIdentity;
+	}
+
+	FStackCapture* SelectPriorityStack(FPriorityIdentity& Identity, EOperation Operation)
+	{
+		switch (Operation)
+		{
+		case EOperation::FinalRelease:   return &Identity.FinalReleaseStack;
+		case EOperation::PhysicalFree:   return &Identity.PhysicalFreeStack;
+		case EOperation::BindingStore:   return &Identity.BindingStoreStack;
+		case EOperation::CommandEnqueue: return &Identity.StaleEnqueueStack;
+		case EOperation::CommandExecute: return &Identity.StaleExecuteStack;
+		default:                         return nullptr;
+		}
+	}
+
+	void CapturePriorityOperationStack(FPriorityIdentity& Identity, EOperation Operation, uint64 CorrelationId, bool bOverwrite)
+	{
+		if (CVarRHIResourceProvenancePriorityStacks.GetValueOnAnyThread() == 0)
+		{
+			return;
+		}
+
+		LockPriorityIdentity(Identity);
+		FStackCapture* Destination = SelectPriorityStack(Identity, Operation);
+		const bool bAlreadyCaptured = Destination == nullptr || Destination->FrameCount != 0;
+		UnlockPriorityIdentity(Identity);
+		if (Destination == nullptr || (bAlreadyCaptured && !bOverwrite))
+		{
+			return;
+		}
+
+		if (bOverwrite)
+		{
+			const uint64 CaptureIndex = GSelectiveCommandStackCaptures.fetch_add(1, std::memory_order_relaxed);
+			if (CaptureIndex >= MaxSelectiveCommandStackCaptures)
+			{
+				GSelectiveCommandStackDrops.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+		}
+
+		FStackCapture Stack = CaptureRawStack();
+		Stack.CorrelationId = CorrelationId;
+		uint64 ResourceId = 0;
+		uint64 ResourceAddress = 0;
+		uint64 FlagsAddress = 0;
+		uint8 ResourceType = 0xff;
+		bool bStored = false;
+		LockPriorityIdentity(Identity);
+		Destination = SelectPriorityStack(Identity, Operation);
+		if (Destination && (Destination->FrameCount == 0 || bOverwrite))
+		{
+			*Destination = Stack;
+			ResourceId = Identity.ResourceId.load(std::memory_order_relaxed);
+			ResourceAddress = Identity.ResourceAddress.load(std::memory_order_relaxed);
+			FlagsAddress = Identity.FlagsAddress.load(std::memory_order_relaxed);
+			ResourceType = static_cast<uint8>(Identity.ResourceType.load(std::memory_order_relaxed));
+			bStored = true;
+		}
+		UnlockPriorityIdentity(Identity);
+
+		if (bStored)
+		{
+			JournalStack(Operation, ResourceId, ResourceAddress, FlagsAddress, ResourceType, Stack);
+		}
+	}
+
+	void UpdatePriorityLifecycle(uint64 ResourceId, EOperation Operation)
+	{
+		if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
+		{
+			Identity->LastOperation.store(static_cast<uint32>(Operation), std::memory_order_release);
+			if (Operation == EOperation::FinalRelease || Operation == EOperation::PhysicalFree)
+			{
+				CapturePriorityOperationStack(*Identity, Operation, 0, false);
+			}
+		}
+	}
+
+	struct FPriorityToken
+	{
+		uint64 ResourceId = 0;
+		uint64 FlagsAddress = 0;
+		uint8 ResourceType = 0xff;
+		EOperation LastOperation = EOperation::ExternalUse;
+	};
+
+	bool ResolvePriorityToken(const void* ResourceAddress, FPriorityToken& OutToken)
+	{
+		const uint64 Address = reinterpret_cast<uint64>(ResourceAddress);
+		const uint64 ResourceId = FindPriorityIdByAddress(Address);
+		FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId);
+		if (!Identity || Identity->ResourceAddress.load(std::memory_order_acquire) != Address)
+		{
+			return false;
+		}
+
+		OutToken.ResourceId = ResourceId;
+		OutToken.FlagsAddress = Identity->FlagsAddress.load(std::memory_order_relaxed);
+		OutToken.ResourceType = static_cast<uint8>(Identity->ResourceType.load(std::memory_order_relaxed));
+		OutToken.LastOperation = static_cast<EOperation>(Identity->LastOperation.load(std::memory_order_acquire));
+		return true;
+	}
+
+	bool IsStalePriorityState(EOperation Operation)
+	{
+		switch (Operation)
+		{
+		case EOperation::FinalRelease:
+		case EOperation::MarkForDelete:
+		case EOperation::MarkForDeleteAlreadySet:
+		case EOperation::DeleteCheck:
+		case EOperation::DeleteBegin:
+		case EOperation::DestructorBegin:
+		case EOperation::PhysicalFree:
+			return true;
+		default:
+			return false;
+		}
 	}
 
 	void CopyIdentityState(FIdentity& Destination, const FIdentity& Source, uint64 ResourceId)
@@ -963,6 +1389,129 @@ namespace
 		}
 	}
 
+	void DumpPriorityStack(const TCHAR* Label, EOperation Operation, uint64 ResourceId, const FStackCapture& Stack)
+	{
+		UE_LOG(LogRHI, Error,
+			TEXT("RHI provenance retained stack: label=%s op=%s id=%llu cycles=%llu thread=%u correlation=%llu frames=%u"),
+			Label,
+			GetOperationName(Operation),
+			static_cast<unsigned long long>(ResourceId),
+			static_cast<unsigned long long>(Stack.Cycles),
+			Stack.ThreadId,
+			static_cast<unsigned long long>(Stack.CorrelationId),
+			Stack.FrameCount);
+
+		for (uint32 FrameIndex = 0; FrameIndex < Stack.FrameCount; ++FrameIndex)
+		{
+			UE_LOG(LogRHI, Error,
+				TEXT("RHI provenance retained stack frame: label=%s id=%llu frame=%u pc=0x%llx"),
+				Label,
+				static_cast<unsigned long long>(ResourceId),
+				FrameIndex,
+				static_cast<unsigned long long>(Stack.Frames[FrameIndex]));
+		}
+	}
+
+	uint32 DumpPriorityMatches(const void* ResourceAddress, const void* FlagsAddress, uint64 ObservedResourceId)
+	{
+		uint32 MatchCount = 0;
+		uint32 AddressGenerationCount = 0;
+		for (FPriorityIdentity& Identity : GPriorityIdentities)
+		{
+			const uint64 PreliminaryId = Identity.ResourceId.load(std::memory_order_acquire);
+			const uint64 PreliminaryResource = Identity.ResourceAddress.load(std::memory_order_relaxed);
+			const uint64 PreliminaryFlags = Identity.FlagsAddress.load(std::memory_order_relaxed);
+			if ((ObservedResourceId == 0 || PreliminaryId != ObservedResourceId) &&
+				PreliminaryResource != reinterpret_cast<uint64>(ResourceAddress) &&
+				PreliminaryFlags != reinterpret_cast<uint64>(FlagsAddress))
+			{
+				continue;
+			}
+
+			if (Identity.Writer.test_and_set(std::memory_order_acquire))
+			{
+				UE_LOG(LogRHI, Error, TEXT("RHI provenance retained identity slot busy during failure dump; one matching generation may be incomplete."));
+				continue;
+			}
+
+			const uint64 IdentityId = Identity.ResourceId.load(std::memory_order_relaxed);
+			const uint64 IdentityResource = Identity.ResourceAddress.load(std::memory_order_relaxed);
+			const uint64 IdentityFlags = Identity.FlagsAddress.load(std::memory_order_relaxed);
+			const bool bIdMatch = ObservedResourceId != 0 && IdentityId == ObservedResourceId;
+			const bool bAddressMatch = IdentityResource == reinterpret_cast<uint64>(ResourceAddress);
+			const bool bFlagsMatch = IdentityFlags == reinterpret_cast<uint64>(FlagsAddress);
+			if (IdentityId == 0 || IdentityId == ReservedIdentityId || (!bIdMatch && !bAddressMatch && !bFlagsMatch))
+			{
+				Identity.Writer.clear(std::memory_order_release);
+				continue;
+			}
+
+			++MatchCount;
+			if (bAddressMatch)
+			{
+				++AddressGenerationCount;
+			}
+
+			TCHAR DebugName[NameCapacity] {};
+			TCHAR OwnerName[NameCapacity] {};
+			TCHAR OwnerPath[PathCapacity] {};
+			TCHAR LastMarker[PathCapacity] {};
+			Identity.DebugName.Get(DebugName);
+			Identity.OwnerName.Get(OwnerName);
+			Identity.OwnerPath.Get(OwnerPath);
+			Identity.LastMarker.Get(LastMarker);
+			const uint64 CreateCaller = Identity.CreateCaller.load(std::memory_order_relaxed);
+			const uint32 ResourceType = Identity.ResourceType.load(std::memory_order_relaxed);
+			const EOperation LastOperation = static_cast<EOperation>(Identity.LastOperation.load(std::memory_order_relaxed));
+			const FStackCapture OwnerAssociationStack = Identity.OwnerAssociationStack;
+			const FStackCapture FinalReleaseStack = Identity.FinalReleaseStack;
+			const FStackCapture PhysicalFreeStack = Identity.PhysicalFreeStack;
+			const FStackCapture BindingStoreStack = Identity.BindingStoreStack;
+			const FStackCapture StaleEnqueueStack = Identity.StaleEnqueueStack;
+			const FStackCapture StaleExecuteStack = Identity.StaleExecuteStack;
+			Identity.Writer.clear(std::memory_order_release);
+
+			UE_LOG(LogRHI, Error,
+				TEXT("RHI provenance retained identity: id=%llu resource=%p flags=%p type=%u create_pc=0x%llx last_state=%s debug='%s' owner='%s' owner_path='%s' last_marker='%s'"),
+				static_cast<unsigned long long>(IdentityId),
+				reinterpret_cast<const void*>(IdentityResource),
+				reinterpret_cast<const void*>(IdentityFlags),
+				ResourceType,
+				static_cast<unsigned long long>(CreateCaller),
+				GetOperationName(LastOperation),
+				DebugName[0] ? DebugName : TEXT("<missing>"),
+				OwnerName[0] ? OwnerName : TEXT("<missing>"),
+				OwnerPath[0] ? OwnerPath : TEXT("<missing>"),
+				LastMarker[0] ? LastMarker : TEXT("<missing>"));
+
+			DumpPriorityStack(TEXT("owner-association"), EOperation::OwnerAssociation, IdentityId, OwnerAssociationStack);
+			DumpPriorityStack(TEXT("final-release"), EOperation::FinalRelease, IdentityId, FinalReleaseStack);
+			DumpPriorityStack(TEXT("physical-free"), EOperation::PhysicalFree, IdentityId, PhysicalFreeStack);
+			DumpPriorityStack(TEXT("binding-store"), EOperation::BindingStore, IdentityId, BindingStoreStack);
+			DumpPriorityStack(TEXT("stale-enqueue"), EOperation::CommandEnqueue, IdentityId, StaleEnqueueStack);
+			DumpPriorityStack(TEXT("stale-execute"), EOperation::CommandExecute, IdentityId, StaleExecuteStack);
+		}
+
+		UE_LOG(LogRHI, Error,
+			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu"),
+			MatchCount,
+			AddressGenerationCount,
+			PriorityIdentityCapacity,
+			static_cast<unsigned long long>(GPriorityIdentityOverflows.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GPriorityAddressIndexOverflows.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GSelectiveCommandStackCaptures.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GSelectiveCommandStackDrops.load(std::memory_order_relaxed)));
+
+		if (AddressGenerationCount > 1)
+		{
+			UE_LOG(LogRHI, Error,
+				TEXT("RHI provenance retained ambiguity: resource address %p has %u owner-associated generations. Correlate IDs and cycles; do not select the newest generation automatically."),
+				ResourceAddress,
+				AddressGenerationCount);
+		}
+		return MatchCount;
+	}
+
 	void DumpIdentityMatches(const void* ResourceAddress, const void* FlagsAddress, uint64 ObservedResourceId)
 	{
 		uint32 AddressGenerationCount = 0;
@@ -1081,7 +1630,7 @@ namespace
 		else if (AddressGenerationCount == 0)
 		{
 			UE_LOG(LogRHI, Error,
-				TEXT("RHI provenance identity miss: no active or recently destroyed generation for resource address %p. Consult the persistent journal; the active table may have overflowed, destroyed history may have been evicted, or the pointer may never have referenced an instrumented FRHIResource."),
+				TEXT("RHI provenance primary identity miss: no active or recently destroyed generation for resource address %p. The separately retained owner-associated identity dump and persistent journal may still recover it. Causes include active-table overflow, destroyed-history eviction, or a pointer that never referenced an instrumented FRHIResource."),
 				ResourceAddress);
 		}
 	}
@@ -1164,6 +1713,7 @@ namespace
 
 uint64 RegisterResource(const void* ResourceAddress, const void* FlagsAddress, uint8 ResourceType, uint64 CallerAddress)
 {
+	ClearPriorityAddressForNewGeneration(reinterpret_cast<uint64>(ResourceAddress));
 	const uint64 ResourceId = GNextResourceId.fetch_add(1, std::memory_order_relaxed);
 	const uint32 StartIndex = static_cast<uint32>(ResourceId) & (IdentityCapacity - 1);
 	FIdentity* ClaimedIdentity = nullptr;
@@ -1240,6 +1790,16 @@ void SetDebugName(
 		}
 		UnlockIdentity(*Identity);
 	}
+
+	if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
+	{
+		LockPriorityIdentity(*Identity);
+		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+		{
+			Identity->DebugName.Set(DebugName);
+		}
+		UnlockPriorityIdentity(*Identity);
+	}
 }
 
 void SetOwnerName(
@@ -1269,6 +1829,16 @@ void SetOwnerName(
 			Identity->OwnerName.Set(OwnerName);
 		}
 		UnlockIdentity(*Identity);
+	}
+
+	if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
+	{
+		LockPriorityIdentity(*Identity);
+		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+		{
+			Identity->OwnerName.Set(OwnerName);
+		}
+		UnlockPriorityIdentity(*Identity);
 	}
 }
 
@@ -1300,6 +1870,49 @@ void SetOwnerPath(
 		}
 		UnlockIdentity(*Identity);
 	}
+
+	if (FPriorityIdentity* Identity = PromotePriorityIdentity(ResourceId, ResourceAddress, FlagsAddress, ResourceType))
+	{
+		LockPriorityIdentity(*Identity);
+		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+		{
+			Identity->OwnerPath.Set(OwnerPath);
+		}
+		UnlockPriorityIdentity(*Identity);
+	}
+}
+
+void RecordMarker(
+	EOperation Operation,
+	uint64 ResourceId,
+	const void* ResourceAddress,
+	const void* FlagsAddress,
+	uint8 ResourceType,
+	const TCHAR* Text)
+{
+	FJournalQueueRecord JournalRecord = MakeJournalRecord(
+		EJournalRecordKind::Marker,
+		Operation,
+		ResourceAddress,
+		FlagsAddress,
+		ResourceId,
+		ResourceType,
+		0,
+		CaptureCallerAddress());
+	CopyJournalText(JournalRecord, Text);
+	GJournalWriter.Enqueue(JournalRecord);
+
+	if (FPriorityIdentity* Identity = PromotePriorityIdentity(ResourceId, ResourceAddress, FlagsAddress, ResourceType))
+	{
+		LockPriorityIdentity(*Identity);
+		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+		{
+			Identity->LastMarker.Set(Text);
+		}
+		UnlockPriorityIdentity(*Identity);
+	}
+
+	Record(Operation, ResourceAddress, FlagsAddress, ResourceId, ResourceType, 0, JournalRecord.CallerAddress);
 }
 
 void Record(
@@ -1347,7 +1960,7 @@ void Record(
 	case EOperation::DeleteCancelled:
 	case EOperation::DestructorBegin:
 	case EOperation::PhysicalFree:
-		if (FIdentity* Identity = FindIdentity(ResourceId))
+			if (FIdentity* Identity = FindIdentity(ResourceId))
 		{
 			LockIdentity(*Identity);
 			if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
@@ -1369,9 +1982,10 @@ void Record(
 					RetireIdentity(*Identity, ResourceId);
 				}
 			}
-			UnlockIdentity(*Identity);
-		}
-		break;
+				UnlockIdentity(*Identity);
+			}
+			UpdatePriorityLifecycle(ResourceId, Operation);
+			break;
 	default:
 		break;
 	}
@@ -1402,7 +2016,30 @@ uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64
 		(static_cast<uint64>(FPlatformTLS::GetCurrentThreadId()) << 32) |
 		static_cast<uint64>(++GTlsCommandSequence);
 
-	Record(Operation, ResourceAddress, nullptr, 0, 0xff, 0, CallerAddress, CorrelationId);
+	FPriorityToken Token;
+	if (ResolvePriorityToken(ResourceAddress, Token))
+	{
+		Record(
+			Operation,
+			ResourceAddress,
+			reinterpret_cast<const void*>(Token.FlagsAddress),
+			Token.ResourceId,
+			Token.ResourceType,
+			0,
+			CallerAddress,
+			CorrelationId);
+		if (IsStalePriorityState(Token.LastOperation))
+		{
+			if (FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId))
+			{
+				CapturePriorityOperationStack(*Identity, Operation, CorrelationId, true);
+			}
+		}
+	}
+	else
+	{
+		Record(Operation, ResourceAddress, nullptr, 0, 0xff, 0, CallerAddress, CorrelationId);
+	}
 	return CorrelationId;
 }
 
@@ -1410,7 +2047,63 @@ void RecordCommandUse(EOperation Operation, const void* ResourceAddress, uint64 
 {
 	if (CorrelationId != 0)
 	{
-		Record(Operation, ResourceAddress, nullptr, 0, 0xff, 0, CallerAddress, CorrelationId);
+		if (Operation == EOperation::CommandExecute)
+		{
+			GTlsLastExecuteCorrelation = CorrelationId;
+			GTlsLastExecuteResourceAddress = reinterpret_cast<uint64>(ResourceAddress);
+		}
+
+		FPriorityToken Token;
+		if (ResolvePriorityToken(ResourceAddress, Token))
+		{
+			Record(
+				Operation,
+				ResourceAddress,
+				reinterpret_cast<const void*>(Token.FlagsAddress),
+				Token.ResourceId,
+				Token.ResourceType,
+				0,
+				CallerAddress,
+				CorrelationId);
+			if (IsStalePriorityState(Token.LastOperation))
+			{
+				if (FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId))
+				{
+					CapturePriorityOperationStack(*Identity, Operation, CorrelationId, true);
+				}
+			}
+		}
+		else
+		{
+			Record(Operation, ResourceAddress, nullptr, 0, 0xff, 0, CallerAddress, CorrelationId);
+		}
+	}
+}
+
+void RecordBindingStore(const void* ResourceAddress, uint64 CallerAddress)
+{
+	if (CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() == 0)
+	{
+		return;
+	}
+
+	FPriorityToken Token;
+	if (!ResolvePriorityToken(ResourceAddress, Token))
+	{
+		return;
+	}
+
+	Record(
+		EOperation::BindingStore,
+		ResourceAddress,
+		reinterpret_cast<const void*>(Token.FlagsAddress),
+		Token.ResourceId,
+		Token.ResourceType,
+		0,
+		CallerAddress);
+	if (FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId))
+	{
+		CapturePriorityOperationStack(*Identity, EOperation::BindingStore, 0, false);
 	}
 }
 
@@ -1423,6 +2116,24 @@ void ReportInvalidAtomic(
 	uint32 OldPacked,
 	uint64 CallerAddress)
 {
+	FPriorityToken FailureToken;
+	const bool bHasRetainedToken = ResolvePriorityToken(ResourceAddress, FailureToken);
+	const uint64 FailureResourceId = bHasRetainedToken ? FailureToken.ResourceId : ObservedResourceId;
+	const uint8 FailureResourceType = bHasRetainedToken ? FailureToken.ResourceType : ObservedResourceType;
+	const uint64 FailureFlagsAddress = bHasRetainedToken ? FailureToken.FlagsAddress : reinterpret_cast<uint64>(FlagsAddress);
+	const uint64 FailureCorrelationId = GTlsLastExecuteResourceAddress == reinterpret_cast<uint64>(ResourceAddress)
+		? GTlsLastExecuteCorrelation
+		: 0;
+	FStackCapture FailureStack = CaptureRawStack();
+	FailureStack.CorrelationId = FailureCorrelationId;
+	JournalStack(
+		EOperation::InvalidUse,
+		FailureResourceId,
+		reinterpret_cast<uint64>(ResourceAddress),
+		FailureFlagsAddress,
+		FailureResourceType,
+		FailureStack);
+
 	const bool bJournalFlushed = GJournalWriter.FlushForFailure(1000);
 	UE_LOG(LogRHI, Error,
 		TEXT("RHI provenance journal: path='%s' failure_flush=%s queued=%llu drained=%llu bytes=%llu queue_drops=%llu disk_cap_drops=%llu write_failures=%llu disabled_or_start_failure_drops=%llu"),
@@ -1446,11 +2157,19 @@ void ReportInvalidAtomic(
 		OldPacked,
 		static_cast<unsigned long long>(CallerAddress));
 
+	UE_LOG(LogRHI, Error,
+		TEXT("RHI provenance invalid-use context: retained_identity=%s recovered_id=%llu recovered_type=%u last_execute_correlation=%llu"),
+		bHasRetainedToken ? TEXT("yes") : TEXT("no"),
+		static_cast<unsigned long long>(FailureResourceId),
+		FailureResourceType,
+		static_cast<unsigned long long>(FailureCorrelationId));
+	DumpPriorityStack(TEXT("invalid-use"), EOperation::InvalidUse, FailureResourceId, FailureStack);
+	DumpPriorityMatches(ResourceAddress, FlagsAddress, ObservedResourceId);
 	DumpIdentityMatches(ResourceAddress, FlagsAddress, ObservedResourceId);
 	DumpEventMatches(ResourceAddress, FlagsAddress, ObservedResourceId);
 
 	UE_LOG(LogRHI, Error,
-		TEXT("RHI provenance notes: PCs require exact-build symbols. owner_path='<missing>' means no higher-level UObject association was supplied. Events cover instrumented CPU operations only."));
+		TEXT("RHI provenance notes: resolve every retained stack PC with exact-build symbols. owner_path='<missing>' means no higher-level association was supplied. PhysicalFree is completion of the C++ delete expression; allocator allocation/free stacks still require Memory Insights. Events cover instrumented CPU operations only."));
 }
 
 } // namespace UE::RHI::ResourceProvenance

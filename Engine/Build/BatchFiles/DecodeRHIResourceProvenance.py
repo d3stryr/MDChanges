@@ -29,6 +29,8 @@ KIND_NAMES = {
     4: "OwnerPath",
     5: "Lifecycle",
     6: "CommandUse",
+    7: "StackFrame",
+    8: "Marker",
 }
 
 OPERATION_NAMES = {
@@ -48,6 +50,10 @@ OPERATION_NAMES = {
     13: "UpdateRequest",
     14: "UpdateExecute",
     15: "ExternalUse",
+    16: "OwnerAssociation",
+    17: "ReleaseReason",
+    18: "BindingStore",
+    19: "InvalidUse",
 }
 
 RESOURCE_TYPE_NAMES = {
