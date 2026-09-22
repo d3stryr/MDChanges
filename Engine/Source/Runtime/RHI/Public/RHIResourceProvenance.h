@@ -53,9 +53,24 @@ namespace UE::RHI::ResourceProvenance
 		uint8 ResourceType,
 		uint64 CallerAddress);
 
-	RHI_API void SetDebugName(uint64 ResourceId, const TCHAR* DebugName);
-	RHI_API void SetOwnerName(uint64 ResourceId, const TCHAR* OwnerName);
-	RHI_API void SetOwnerPath(uint64 ResourceId, const TCHAR* OwnerPath);
+	RHI_API void SetDebugName(
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		const void* FlagsAddress,
+		uint8 ResourceType,
+		const TCHAR* DebugName);
+	RHI_API void SetOwnerName(
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		const void* FlagsAddress,
+		uint8 ResourceType,
+		const TCHAR* OwnerName);
+	RHI_API void SetOwnerPath(
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		const void* FlagsAddress,
+		uint8 ResourceType,
+		const TCHAR* OwnerPath);
 
 	RHI_API void Record(
 		EOperation Operation,
