@@ -150,19 +150,19 @@ public:
 #endif
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 		const FString OwnerNameString = InOwnerName.ToString();
-		UE::RHI::ResourceProvenance::SetOwnerName(ProvenanceId, *OwnerNameString);
+		UE::RHI::ResourceProvenance::SetOwnerName(ProvenanceId, this, &AtomicFlags, static_cast<uint8>(ResourceType), *OwnerNameString);
 #endif
 	}
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 	inline void SetProvenanceDebugName(const TCHAR* InDebugName) const
 	{
-		UE::RHI::ResourceProvenance::SetDebugName(ProvenanceId, InDebugName);
+		UE::RHI::ResourceProvenance::SetDebugName(ProvenanceId, this, &AtomicFlags, static_cast<uint8>(ResourceType), InDebugName);
 	}
 
 	inline void SetProvenanceOwnerPath(const TCHAR* InOwnerPath) const
 	{
-		UE::RHI::ResourceProvenance::SetOwnerPath(ProvenanceId, InOwnerPath);
+		UE::RHI::ResourceProvenance::SetOwnerPath(ProvenanceId, this, &AtomicFlags, static_cast<uint8>(ResourceType), InOwnerPath);
 	}
 #endif
 
