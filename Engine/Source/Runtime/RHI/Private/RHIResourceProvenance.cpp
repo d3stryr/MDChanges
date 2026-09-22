@@ -654,7 +654,7 @@ namespace
 		std::atomic<uint64> BytesWritten { 0 };
 
 		FRunnableThread* Thread = nullptr;
-		FEvent* WakeEvent = nullptr;
+		::FEvent* WakeEvent = nullptr;
 		IFileHandle* FileHandle = nullptr;
 		FString JournalPath;
 		TArray<uint8> WriteBuffer;
