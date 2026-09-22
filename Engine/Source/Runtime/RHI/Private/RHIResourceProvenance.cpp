@@ -27,6 +27,9 @@ namespace
 	static constexpr uint32 ThreadBufferCount = 128;
 	static constexpr uint32 EventsPerThread = 2048;
 	static constexpr uint32 IdentityCapacity = 32768;
+	static constexpr uint32 DestroyedIdentityCapacity = 32768;
+	static constexpr uint32 IdentityProbeLimit = 512;
+	static constexpr uint64 ReservedIdentityId = MAX_uint64;
 	static constexpr uint32 NameCapacity = 64;
 	static constexpr uint32 PathCapacity = 96;
 	static constexpr uint32 LifecycleEventsPerIdentity = 8;
@@ -38,6 +41,8 @@ namespace
 	static constexpr uint32 JournalFlushMilliseconds = 2000;
 
 	static_assert((EventsPerThread & (EventsPerThread - 1)) == 0, "EventsPerThread must be a power of two.");
+	static_assert((IdentityCapacity & (IdentityCapacity - 1)) == 0, "IdentityCapacity must be a power of two.");
+	static_assert((DestroyedIdentityCapacity & (DestroyedIdentityCapacity - 1)) == 0, "DestroyedIdentityCapacity must be a power of two.");
 	static_assert((JournalQueueCapacity & (JournalQueueCapacity - 1)) == 0, "JournalQueueCapacity must be a power of two.");
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceJournal(
@@ -215,7 +220,7 @@ namespace
 			{
 				Slot = &Slots[Position & (JournalQueueCapacity - 1)];
 				const uint64 Sequence = Slot->Sequence.load(std::memory_order_acquire);
-				const int64 Difference = static_cast<int64>(Sequence - Position);
+				const int64 Difference = static_cast<int64>(Sequence) - static_cast<int64>(Position);
 				if (Difference == 0)
 				{
 					if (EnqueuePosition.compare_exchange_weak(
@@ -247,7 +252,7 @@ namespace
 			const uint64 Position = DequeuePosition.load(std::memory_order_relaxed);
 			FJournalQueueSlot& Slot = Slots[Position & (JournalQueueCapacity - 1)];
 			const uint64 Sequence = Slot.Sequence.load(std::memory_order_acquire);
-			const int64 Difference = static_cast<int64>(Sequence - (Position + 1));
+			const int64 Difference = static_cast<int64>(Sequence) - static_cast<int64>(Position + 1);
 			if (Difference != 0)
 			{
 				return false;
@@ -723,11 +728,14 @@ namespace
 
 	FThreadBuffer GThreadBuffers[ThreadBufferCount];
 	FIdentity GIdentities[IdentityCapacity];
+	FIdentity GDestroyedIdentities[DestroyedIdentityCapacity];
 
 	std::atomic<uint32> GNextThreadBuffer { 0 };
 	std::atomic<uint64> GNextResourceId { 1 };
+	std::atomic<uint64> GNextDestroyedIdentity { 0 };
 	std::atomic<uint64> GThreadBufferOverflows { 0 };
-	std::atomic<uint64> GIdentityEvictions { 0 };
+	std::atomic<uint64> GActiveIdentityOverflows { 0 };
+	std::atomic<uint64> GDestroyedIdentityEvictions { 0 };
 
 	thread_local int32 GTlsThreadBufferIndex = -2;
 	thread_local uint32 GTlsCommandSequence = 0;
@@ -765,13 +773,21 @@ namespace
 
 	FIdentity* FindIdentity(uint64 ResourceId)
 	{
-		if (ResourceId == 0)
+		if (ResourceId == 0 || ResourceId == ReservedIdentityId)
 		{
 			return nullptr;
 		}
 
-		FIdentity& Identity = GIdentities[ResourceId % IdentityCapacity];
-		return Identity.ResourceId.load(std::memory_order_acquire) == ResourceId ? &Identity : nullptr;
+		const uint32 StartIndex = static_cast<uint32>(ResourceId) & (IdentityCapacity - 1);
+		for (uint32 Probe = 0; Probe < IdentityProbeLimit; ++Probe)
+		{
+			FIdentity& Identity = GIdentities[(StartIndex + Probe) & (IdentityCapacity - 1)];
+			if (Identity.ResourceId.load(std::memory_order_acquire) == ResourceId)
+			{
+				return &Identity;
+			}
+		}
+		return nullptr;
 	}
 
 	void LockIdentity(FIdentity& Identity)
@@ -785,6 +801,49 @@ namespace
 	void UnlockIdentity(FIdentity& Identity)
 	{
 		Identity.Writer.clear(std::memory_order_release);
+	}
+
+	void CopyIdentityState(FIdentity& Destination, const FIdentity& Source, uint64 ResourceId)
+	{
+		TCHAR DebugName[NameCapacity] {};
+		TCHAR OwnerName[NameCapacity] {};
+		TCHAR OwnerPath[PathCapacity] {};
+		Source.DebugName.Get(DebugName);
+		Source.OwnerName.Get(OwnerName);
+		Source.OwnerPath.Get(OwnerPath);
+
+		Destination.ResourceId.store(0, std::memory_order_release);
+		Destination.ResourceAddress.store(Source.ResourceAddress.load(std::memory_order_relaxed), std::memory_order_relaxed);
+		Destination.FlagsAddress.store(Source.FlagsAddress.load(std::memory_order_relaxed), std::memory_order_relaxed);
+		Destination.CreateCaller.store(Source.CreateCaller.load(std::memory_order_relaxed), std::memory_order_relaxed);
+		Destination.LastStateCaller.store(Source.LastStateCaller.load(std::memory_order_relaxed), std::memory_order_relaxed);
+		Destination.ResourceType.store(Source.ResourceType.load(std::memory_order_relaxed), std::memory_order_relaxed);
+		Destination.LastOperation.store(Source.LastOperation.load(std::memory_order_relaxed), std::memory_order_relaxed);
+		Destination.LifecycleWriteIndex = Source.LifecycleWriteIndex;
+		for (uint32 Index = 0; Index < LifecycleEventsPerIdentity; ++Index)
+		{
+			Destination.Lifecycle[Index] = Source.Lifecycle[Index];
+		}
+		Destination.DebugName.Set(DebugName);
+		Destination.OwnerName.Set(OwnerName);
+		Destination.OwnerPath.Set(OwnerPath);
+		Destination.ResourceId.store(ResourceId, std::memory_order_release);
+	}
+
+	void RetireIdentity(FIdentity& Identity, uint64 ResourceId)
+	{
+		const uint64 Sequence = GNextDestroyedIdentity.fetch_add(1, std::memory_order_relaxed);
+		FIdentity& Destination = GDestroyedIdentities[Sequence & (DestroyedIdentityCapacity - 1)];
+
+		LockIdentity(Destination);
+		if (Destination.ResourceId.load(std::memory_order_relaxed) != 0)
+		{
+			GDestroyedIdentityEvictions.fetch_add(1, std::memory_order_relaxed);
+		}
+		CopyIdentityState(Destination, Identity, ResourceId);
+		UnlockIdentity(Destination);
+
+		Identity.ResourceId.store(0, std::memory_order_release);
 	}
 
 	FThreadBuffer* GetThreadBuffer()
@@ -885,100 +944,109 @@ namespace
 	{
 		uint32 AddressGenerationCount = 0;
 
-		for (FIdentity& Identity : GIdentities)
+		auto DumpTable = [&](FIdentity* Identities, uint32 Count, const TCHAR* StorageName)
 		{
-			const uint64 PreliminaryId = Identity.ResourceId.load(std::memory_order_acquire);
-			const uint64 PreliminaryResource = Identity.ResourceAddress.load(std::memory_order_relaxed);
-			const uint64 PreliminaryFlags = Identity.FlagsAddress.load(std::memory_order_relaxed);
-			if ((ObservedResourceId == 0 || PreliminaryId != ObservedResourceId) &&
-				PreliminaryResource != reinterpret_cast<uint64>(ResourceAddress) &&
-				PreliminaryFlags != reinterpret_cast<uint64>(FlagsAddress))
+			for (uint32 IdentityIndex = 0; IdentityIndex < Count; ++IdentityIndex)
 			{
-				continue;
-			}
-
-			// Failure reporting must not wait on a writer that may have stopped.
-			if (Identity.Writer.test_and_set(std::memory_order_acquire))
-			{
-				UE_LOG(LogRHI, Error, TEXT("RHI provenance identity slot busy during failure dump; one matching identity may be incomplete."));
-				continue;
-			}
-
-			const uint64 IdentityId = Identity.ResourceId.load(std::memory_order_relaxed);
-			const uint64 IdentityResource = Identity.ResourceAddress.load(std::memory_order_relaxed);
-			const uint64 IdentityFlags = Identity.FlagsAddress.load(std::memory_order_relaxed);
-			const bool bIdMatch = ObservedResourceId != 0 && IdentityId == ObservedResourceId;
-			const bool bAddressMatch = IdentityResource == reinterpret_cast<uint64>(ResourceAddress);
-			const bool bFlagsMatch = IdentityFlags == reinterpret_cast<uint64>(FlagsAddress);
-			if (IdentityId == 0 || (!bIdMatch && !bAddressMatch && !bFlagsMatch))
-			{
-				Identity.Writer.clear(std::memory_order_release);
-				continue;
-			}
-
-			if (bAddressMatch)
-			{
-				++AddressGenerationCount;
-			}
-
-			TCHAR DebugName[NameCapacity] {};
-			TCHAR OwnerName[NameCapacity] {};
-			TCHAR OwnerPath[PathCapacity] {};
-			Identity.DebugName.Get(DebugName);
-			Identity.OwnerName.Get(OwnerName);
-			Identity.OwnerPath.Get(OwnerPath);
-
-			const uint32 ResourceType = Identity.ResourceType.load(std::memory_order_relaxed);
-			const uint64 CreateCaller = Identity.CreateCaller.load(std::memory_order_relaxed);
-			const EOperation LastOperation = static_cast<EOperation>(Identity.LastOperation.load(std::memory_order_relaxed));
-			const uint64 LastStateCaller = Identity.LastStateCaller.load(std::memory_order_relaxed);
-
-			FLifecycleEvent LifecycleEvents[LifecycleEventsPerIdentity] {};
-			uint32 LifecycleEventCount = 0;
-			const uint32 LifecycleWriteIndex = Identity.LifecycleWriteIndex;
-			const uint32 FirstLifecycleIndex = LifecycleWriteIndex > LifecycleEventsPerIdentity
-				? LifecycleWriteIndex - LifecycleEventsPerIdentity
-				: 0;
-			for (uint32 LifecycleIndex = FirstLifecycleIndex; LifecycleIndex < LifecycleWriteIndex; ++LifecycleIndex)
-			{
-				const FLifecycleEvent& Event = Identity.Lifecycle[LifecycleIndex % LifecycleEventsPerIdentity];
-				if (Event.Sequence == static_cast<uint64>(LifecycleIndex) + 1)
+				FIdentity& Identity = Identities[IdentityIndex];
+				const uint64 PreliminaryId = Identity.ResourceId.load(std::memory_order_acquire);
+				const uint64 PreliminaryResource = Identity.ResourceAddress.load(std::memory_order_relaxed);
+				const uint64 PreliminaryFlags = Identity.FlagsAddress.load(std::memory_order_relaxed);
+				if ((ObservedResourceId == 0 || PreliminaryId != ObservedResourceId) &&
+					PreliminaryResource != reinterpret_cast<uint64>(ResourceAddress) &&
+					PreliminaryFlags != reinterpret_cast<uint64>(FlagsAddress))
 				{
-					LifecycleEvents[LifecycleEventCount++] = Event;
+					continue;
+				}
+
+				// Failure reporting must not wait on a writer that may have stopped.
+				if (Identity.Writer.test_and_set(std::memory_order_acquire))
+				{
+					UE_LOG(LogRHI, Error, TEXT("RHI provenance %s identity slot busy during failure dump; one matching identity may be incomplete."), StorageName);
+					continue;
+				}
+
+				const uint64 IdentityId = Identity.ResourceId.load(std::memory_order_relaxed);
+				const uint64 IdentityResource = Identity.ResourceAddress.load(std::memory_order_relaxed);
+				const uint64 IdentityFlags = Identity.FlagsAddress.load(std::memory_order_relaxed);
+				const bool bIdMatch = ObservedResourceId != 0 && IdentityId == ObservedResourceId;
+				const bool bAddressMatch = IdentityResource == reinterpret_cast<uint64>(ResourceAddress);
+				const bool bFlagsMatch = IdentityFlags == reinterpret_cast<uint64>(FlagsAddress);
+				if (IdentityId == 0 || IdentityId == ReservedIdentityId || (!bIdMatch && !bAddressMatch && !bFlagsMatch))
+				{
+					Identity.Writer.clear(std::memory_order_release);
+					continue;
+				}
+
+				if (bAddressMatch)
+				{
+					++AddressGenerationCount;
+				}
+
+				TCHAR DebugName[NameCapacity] {};
+				TCHAR OwnerName[NameCapacity] {};
+				TCHAR OwnerPath[PathCapacity] {};
+				Identity.DebugName.Get(DebugName);
+				Identity.OwnerName.Get(OwnerName);
+				Identity.OwnerPath.Get(OwnerPath);
+
+				const uint32 ResourceType = Identity.ResourceType.load(std::memory_order_relaxed);
+				const uint64 CreateCaller = Identity.CreateCaller.load(std::memory_order_relaxed);
+				const EOperation LastOperation = static_cast<EOperation>(Identity.LastOperation.load(std::memory_order_relaxed));
+				const uint64 LastStateCaller = Identity.LastStateCaller.load(std::memory_order_relaxed);
+
+				FLifecycleEvent LifecycleEvents[LifecycleEventsPerIdentity] {};
+				uint32 LifecycleEventCount = 0;
+				const uint32 LifecycleWriteIndex = Identity.LifecycleWriteIndex;
+				const uint32 FirstLifecycleIndex = LifecycleWriteIndex > LifecycleEventsPerIdentity
+					? LifecycleWriteIndex - LifecycleEventsPerIdentity
+					: 0;
+				for (uint32 LifecycleIndex = FirstLifecycleIndex; LifecycleIndex < LifecycleWriteIndex; ++LifecycleIndex)
+				{
+					const FLifecycleEvent& Event = Identity.Lifecycle[LifecycleIndex % LifecycleEventsPerIdentity];
+					if (Event.Sequence == static_cast<uint64>(LifecycleIndex) + 1)
+					{
+						LifecycleEvents[LifecycleEventCount++] = Event;
+					}
+				}
+
+				Identity.Writer.clear(std::memory_order_release);
+
+				UE_LOG(LogRHI, Error,
+					TEXT("RHI provenance identity: storage=%s id=%llu resource=%p flags=%p type=%u create_pc=0x%llx last_state=%s last_state_pc=0x%llx lifecycle_total=%u lifecycle_retained=%u lifecycle_omitted=%u debug='%s' owner='%s' owner_path='%s'"),
+					StorageName,
+					static_cast<unsigned long long>(IdentityId),
+					reinterpret_cast<const void*>(IdentityResource),
+					reinterpret_cast<const void*>(IdentityFlags),
+					ResourceType,
+					static_cast<unsigned long long>(CreateCaller),
+					GetOperationName(LastOperation),
+					static_cast<unsigned long long>(LastStateCaller),
+					LifecycleWriteIndex,
+					LifecycleEventCount,
+					LifecycleWriteIndex > LifecycleEventCount ? LifecycleWriteIndex - LifecycleEventCount : 0,
+					DebugName[0] ? DebugName : TEXT("<missing>"),
+					OwnerName[0] ? OwnerName : TEXT("<missing>"),
+					OwnerPath[0] ? OwnerPath : TEXT("<missing>"));
+
+				for (uint32 LifecycleIndex = 0; LifecycleIndex < LifecycleEventCount; ++LifecycleIndex)
+				{
+					const FLifecycleEvent& Event = LifecycleEvents[LifecycleIndex];
+					UE_LOG(LogRHI, Error,
+						TEXT("RHI provenance lifecycle: storage=%s identity_seq=%llu cycles=%llu thread=%u op=%s packed=0x%08x pc=0x%llx"),
+						StorageName,
+						static_cast<unsigned long long>(Event.Sequence),
+						static_cast<unsigned long long>(Event.Cycles),
+						Event.ThreadId,
+						GetOperationName(static_cast<EOperation>(Event.Operation)),
+						Event.PackedValue,
+						static_cast<unsigned long long>(Event.CallerAddress));
 				}
 			}
+		};
 
-			Identity.Writer.clear(std::memory_order_release);
-
-			UE_LOG(LogRHI, Error,
-				TEXT("RHI provenance identity: id=%llu resource=%p flags=%p type=%u create_pc=0x%llx last_state=%s last_state_pc=0x%llx lifecycle_total=%u lifecycle_retained=%u lifecycle_omitted=%u debug='%s' owner='%s' owner_path='%s'"),
-				static_cast<unsigned long long>(IdentityId),
-				reinterpret_cast<const void*>(IdentityResource),
-				reinterpret_cast<const void*>(IdentityFlags),
-				ResourceType,
-				static_cast<unsigned long long>(CreateCaller),
-				GetOperationName(LastOperation),
-				static_cast<unsigned long long>(LastStateCaller),
-				LifecycleWriteIndex,
-				LifecycleEventCount,
-				LifecycleWriteIndex > LifecycleEventCount ? LifecycleWriteIndex - LifecycleEventCount : 0,
-				DebugName[0] ? DebugName : TEXT("<missing>"),
-				OwnerName[0] ? OwnerName : TEXT("<missing>"),
-				OwnerPath[0] ? OwnerPath : TEXT("<missing>"));
-
-			for (uint32 LifecycleIndex = 0; LifecycleIndex < LifecycleEventCount; ++LifecycleIndex)
-			{
-				const FLifecycleEvent& Event = LifecycleEvents[LifecycleIndex];
-				UE_LOG(LogRHI, Error,
-					TEXT("RHI provenance lifecycle: identity_seq=%llu cycles=%llu thread=%u op=%s packed=0x%08x pc=0x%llx"),
-					static_cast<unsigned long long>(Event.Sequence),
-					static_cast<unsigned long long>(Event.Cycles),
-					Event.ThreadId,
-					GetOperationName(static_cast<EOperation>(Event.Operation)),
-					Event.PackedValue,
-					static_cast<unsigned long long>(Event.CallerAddress));
-			}
-		}
+		DumpTable(GIdentities, IdentityCapacity, TEXT("active"));
+		DumpTable(GDestroyedIdentities, DestroyedIdentityCapacity, TEXT("destroyed"));
 
 		if (AddressGenerationCount > 1)
 		{
@@ -990,7 +1058,7 @@ namespace
 		else if (AddressGenerationCount == 0)
 		{
 			UE_LOG(LogRHI, Error,
-				TEXT("RHI provenance identity miss: no retained generation for resource address %p. The identity may have been evicted or the pointer may never have referenced an instrumented FRHIResource."),
+				TEXT("RHI provenance identity miss: no active or recently destroyed generation for resource address %p. Consult the persistent journal; the active table may have overflowed, destroyed history may have been evicted, or the pointer may never have referenced an instrumented FRHIResource."),
 				ResourceAddress);
 		}
 	}
@@ -1058,7 +1126,7 @@ namespace
 		}
 
 		UE_LOG(LogRHI, Error,
-			TEXT("RHI provenance coverage: retained_matching_events=%u total_matching_events=%llu matching_events_omitted=%llu thread_buffers=%u/%u thread_buffer_overflows=%llu overwritten_events_all_threads=%llu identity_evictions=%llu."),
+			TEXT("RHI provenance coverage: retained_matching_events=%u total_matching_events=%llu matching_events_omitted=%llu thread_buffers=%u/%u thread_buffer_overflows=%llu overwritten_events_all_threads=%llu active_identity_overflows=%llu destroyed_identity_evictions=%llu."),
 			MatchCount,
 			static_cast<unsigned long long>(TotalMatches),
 			static_cast<unsigned long long>(TotalMatches > MatchCount ? TotalMatches - MatchCount : 0),
@@ -1066,35 +1134,56 @@ namespace
 			ThreadBufferCount,
 			static_cast<unsigned long long>(GThreadBufferOverflows.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(TotalOverwritten),
-			static_cast<unsigned long long>(GIdentityEvictions.load(std::memory_order_relaxed)));
+			static_cast<unsigned long long>(GActiveIdentityOverflows.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GDestroyedIdentityEvictions.load(std::memory_order_relaxed)));
 	}
 }
 
 uint64 RegisterResource(const void* ResourceAddress, const void* FlagsAddress, uint8 ResourceType, uint64 CallerAddress)
 {
 	const uint64 ResourceId = GNextResourceId.fetch_add(1, std::memory_order_relaxed);
-	FIdentity& Identity = GIdentities[ResourceId % IdentityCapacity];
+	const uint32 StartIndex = static_cast<uint32>(ResourceId) & (IdentityCapacity - 1);
+	FIdentity* ClaimedIdentity = nullptr;
 
-	LockIdentity(Identity);
-
-	if (Identity.ResourceId.load(std::memory_order_relaxed) != 0)
+	for (uint32 Probe = 0; Probe < IdentityProbeLimit; ++Probe)
 	{
-		GIdentityEvictions.fetch_add(1, std::memory_order_relaxed);
+		FIdentity& Candidate = GIdentities[(StartIndex + Probe) & (IdentityCapacity - 1)];
+		uint64 ExpectedId = 0;
+		if (Candidate.ResourceId.compare_exchange_strong(
+			ExpectedId,
+			ReservedIdentityId,
+			std::memory_order_acq_rel,
+			std::memory_order_relaxed))
+		{
+			ClaimedIdentity = &Candidate;
+			break;
+		}
 	}
 
-	Identity.ResourceId.store(0, std::memory_order_release);
-	Identity.ResourceAddress.store(reinterpret_cast<uint64>(ResourceAddress), std::memory_order_relaxed);
-	Identity.FlagsAddress.store(reinterpret_cast<uint64>(FlagsAddress), std::memory_order_relaxed);
-	Identity.CreateCaller.store(CallerAddress, std::memory_order_relaxed);
-	Identity.LastStateCaller.store(CallerAddress, std::memory_order_relaxed);
-	Identity.ResourceType.store(ResourceType, std::memory_order_relaxed);
-	Identity.LastOperation.store(static_cast<uint32>(EOperation::Create), std::memory_order_relaxed);
-	Identity.DebugName.Set(nullptr);
-	Identity.OwnerName.Set(nullptr);
-	Identity.OwnerPath.Set(nullptr);
-	Identity.ResourceId.store(ResourceId, std::memory_order_release);
-
-	UnlockIdentity(Identity);
+	if (ClaimedIdentity)
+	{
+		LockIdentity(*ClaimedIdentity);
+		ClaimedIdentity->ResourceAddress.store(reinterpret_cast<uint64>(ResourceAddress), std::memory_order_relaxed);
+		ClaimedIdentity->FlagsAddress.store(reinterpret_cast<uint64>(FlagsAddress), std::memory_order_relaxed);
+		ClaimedIdentity->CreateCaller.store(CallerAddress, std::memory_order_relaxed);
+		ClaimedIdentity->LastStateCaller.store(CallerAddress, std::memory_order_relaxed);
+		ClaimedIdentity->ResourceType.store(ResourceType, std::memory_order_relaxed);
+		ClaimedIdentity->LastOperation.store(static_cast<uint32>(EOperation::Create), std::memory_order_relaxed);
+		ClaimedIdentity->LifecycleWriteIndex = 0;
+		for (FLifecycleEvent& LifecycleEvent : ClaimedIdentity->Lifecycle)
+		{
+			LifecycleEvent = {};
+		}
+		ClaimedIdentity->DebugName.Set(nullptr);
+		ClaimedIdentity->OwnerName.Set(nullptr);
+		ClaimedIdentity->OwnerPath.Set(nullptr);
+		ClaimedIdentity->ResourceId.store(ResourceId, std::memory_order_release);
+		UnlockIdentity(*ClaimedIdentity);
+	}
+	else
+	{
+		GActiveIdentityOverflows.fetch_add(1, std::memory_order_relaxed);
+	}
 
 	Record(EOperation::Create, ResourceAddress, FlagsAddress, ResourceId, ResourceType, 0, CallerAddress);
 	return ResourceId;
@@ -1200,32 +1289,29 @@ void Record(
 	uint64 CallerAddress,
 	uint64 CorrelationId)
 {
-	FThreadBuffer* Buffer = GetThreadBuffer();
-	if (!Buffer)
+	if (FThreadBuffer* Buffer = GetThreadBuffer())
 	{
-		return;
+		const uint64 Sequence = Buffer->TotalWrites.fetch_add(1, std::memory_order_relaxed) + 1;
+		FEvent& Event = Buffer->Events[Buffer->WriteIndex++ & (EventsPerThread - 1)];
+
+		while (Event.Writer.test_and_set(std::memory_order_acquire))
+		{
+			FPlatformProcess::YieldThread();
+		}
+
+		Event.PublishedSequence = Sequence;
+		Event.Cycles = FPlatformTime::Cycles64();
+		Event.ResourceAddress = reinterpret_cast<uint64>(ResourceAddress);
+		Event.FlagsAddress = reinterpret_cast<uint64>(FlagsAddress);
+		Event.ResourceId = ResourceId;
+		Event.CallerAddress = CallerAddress;
+		Event.CorrelationId = CorrelationId;
+		Event.PackedValue = PackedValue;
+		Event.ThreadId = Buffer->ThreadId;
+		Event.OperationAndType = static_cast<uint32>(Operation) | (static_cast<uint32>(ResourceType) << 8);
+
+		Event.Writer.clear(std::memory_order_release);
 	}
-
-	const uint64 Sequence = Buffer->TotalWrites.fetch_add(1, std::memory_order_relaxed) + 1;
-	FEvent& Event = Buffer->Events[Buffer->WriteIndex++ & (EventsPerThread - 1)];
-
-	while (Event.Writer.test_and_set(std::memory_order_acquire))
-	{
-		FPlatformProcess::YieldThread();
-	}
-
-	Event.PublishedSequence = Sequence;
-	Event.Cycles = FPlatformTime::Cycles64();
-	Event.ResourceAddress = reinterpret_cast<uint64>(ResourceAddress);
-	Event.FlagsAddress = reinterpret_cast<uint64>(FlagsAddress);
-	Event.ResourceId = ResourceId;
-	Event.CallerAddress = CallerAddress;
-	Event.CorrelationId = CorrelationId;
-	Event.PackedValue = PackedValue;
-	Event.ThreadId = Buffer->ThreadId;
-	Event.OperationAndType = static_cast<uint32>(Operation) | (static_cast<uint32>(ResourceType) << 8);
-
-	Event.Writer.clear(std::memory_order_release);
 
 	switch (Operation)
 	{
@@ -1254,6 +1340,11 @@ void Record(
 				LifecycleEvent.PackedValue = PackedValue;
 				LifecycleEvent.ThreadId = FPlatformTLS::GetCurrentThreadId();
 				LifecycleEvent.Operation = static_cast<uint32>(Operation);
+
+				if (Operation == EOperation::PhysicalFree)
+				{
+					RetireIdentity(*Identity, ResourceId);
+				}
 			}
 			UnlockIdentity(*Identity);
 		}
