@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [4a593025ba1f2f5cc2ccfc9c71a15ad9e08ff068](https://github.com/d3stryr/UnrealEngine/commit/4a593025ba1f2f5cc2ccfc9c71a15ad9e08ff068)
+- Source commit: [fd8143544ee19114eb2c3c4693927eb2c9e7c5c5](https://github.com/d3stryr/UnrealEngine/commit/fd8143544ee19114eb2c3c4693927eb2c9e7c5c5)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -18,7 +18,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
 | `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `4573061c1a0c08d2d4a3b6c4acd09ddf97109e2f` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, and command correlation API. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `e0080f94a75e31f01055fc6dfd57afc5a08ae271` | Added | Bounded per-thread events, active/destroyed identity retention, background binary journal, lifecycle history, failure reporting, and optional command-use capture. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `b1245f973ab0421220c383ad3fe2cdc5a9fbc4e2` | Added | Bounded per-thread events, active/destroyed identity retention, background binary journal, lifecycle history, failure reporting, and optional command-use capture. |
 | `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `d8887be077f6050b54a3db0280127f0778e8e3ed` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture with resource/flags identity fields. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
@@ -89,7 +89,7 @@ A `PhysicalFree` event means the C++ delete expression completed. Memory Insight
 - 8 lifecycle events per active/destroyed identity
 - 16,384 preallocated journal queue records
 - 256 KiB background write buffer
-- 1,024 MiB default journal cap, configurable before journal startup with `r.RHI.ResourceProvenance.JournalMaxMB`
+- 10,240 MiB (10 GiB) default journal cap, configurable before journal startup with `r.RHI.ResourceProvenance.JournalMaxMB`; accepted range is 16–16,384 MiB
 - 256 matching events emitted during failure reporting
 
 These limits intentionally bound memory and disk use. Event overwrites, active-table overflow, destroyed-history eviction, journal queue drops, disk-cap drops, thread-buffer exhaustion, and omitted matching events are reported. Normal AddRef/Release events remain in memory; creation, identity metadata, and decisive lifecycle operations are persisted.
@@ -103,6 +103,15 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - A full diagnostic PS5 rebuild is required because the instrumented `FRHIResource` layout and RHI module implementation changed.
 
 ## Change log
+
+### 2026-09-22 — Raise persistent journal cap to 10 GiB
+
+- The captured PS5 run reached the previous 1,024 MiB cap at approximately 282.57 seconds and reported 19,803,907 disk-cap drops, so the journal did not retain command-use records through the later crash.
+- Raised the default `r.RHI.ResourceProvenance.JournalMaxMB` value from 1,024 MiB to 10,240 MiB.
+- Raised the accepted upper bound from 4,096 MiB to 16,384 MiB so the 10 GiB default and explicit overrides are not clamped back to 4 GiB.
+- Retained the existing `uint64` byte calculation (`static_cast<uint64>(MaximumMiB) * 1024ull * 1024ull`) to avoid 32-bit overflow.
+- This changes bounded disk usage only; the queue, per-thread buffers, and in-memory identity capacities are unchanged.
+- Updated the complete mirrored `RHIResourceProvenance.cpp`.
 
 ### 2026-09-22 — Fix journal FEvent name collision
 
