@@ -53,7 +53,7 @@ namespace
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceJournalMaxMB(
 		TEXT("r.RHI.ResourceProvenance.JournalMaxMB"),
-		512,
+		1024,
 		TEXT("Maximum size in MiB of the RHI resource provenance journal. Sampled when the journal starts."),
 		ECVF_Default);
 
