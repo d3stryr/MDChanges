@@ -30,16 +30,12 @@ public:
 	 * bRecreateUniformBuffer must be false if any components have their rendering state created which might reference this!
 	 * The calling code is responsible for issuing a FGlobalComponentRecreateRenderStateContext before modifying.  Otherwise cached mesh draw commands will be left with a dangling pointer.
 	 */
-	void GameThread_UpdateContents(
-		const FGuid& InId,
-		const TArray<FVector4f>& Data,
-		const FName& InOwnerName,
+	void GameThread_UpdateContents(const FGuid& InId, const TArray<FVector4f>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer);
+
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-		const FString& InCollectionPath,
-		const FString& InInstancePath,
-		const FString& InWorldPath,
+	/** Copy UObject identity while it is valid on the game thread, then publish it to the render thread. */
+	void GameThread_SetProvenancePaths(FString InCollectionPath, FString InInstancePath, FString InWorldPath);
 #endif
-		bool bRecreateUniformBuffer);
 
 	/** Destroy, called from the game thread. */
 	void GameThread_Destroy();
@@ -69,21 +65,18 @@ private:
 
 	FName OwnerName;
 
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	FString ProvenanceCollectionPath;
+	FString ProvenanceInstancePath;
+	FString ProvenanceWorldPath;
+#endif
+
 	/** Uniform buffer containing the UMaterialParameterCollection default parameter values and UMaterialParameterCollectionInstance instance overrides. */
 	FUniformBufferRHIRef UniformBuffer;
 
 	FUniformBufferLayoutRHIRef UniformBufferLayout;
 
-	void UpdateContents(
-		const FGuid& InId,
-		const TArray<FVector4f>& Data,
-		const FName& InOwnerName,
-#if RHI_RESOURCE_PROVENANCE_ENABLED
-		const FString& InCollectionPath,
-		const FString& InInstancePath,
-		const FString& InWorldPath,
-#endif
-		bool bRecreateUniformBuffer);
+	void UpdateContents(const FGuid& InId, const TArray<FVector4f>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer);
 };
 
 // Default instance resources used when rendering a material using a parameter collection but there's no FScene present to get a FMaterialParameterCollectionInstanceResource

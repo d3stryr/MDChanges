@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [8736eedc0f700a917059968c1b69c63045034340](https://github.com/d3stryr/UnrealEngine/commit/8736eedc0f700a917059968c1b69c63045034340)
+- Source commit: [ffcaf2e6101fccb6c9639a2061c0c8d76b7429d5](https://github.com/d3stryr/UnrealEngine/commit/ffcaf2e6101fccb6c9639a2061c0c8d76b7429d5)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -24,8 +24,8 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
 | `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `f5aa614302a7a67b93f3921a90006c3e58db1330` | Added | Streams and filters `.rhiprov` journals by generation ID, resource address, or flags address and emits readable TSV. |
-| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `1ed7eec251a8e57a4b0ce4afd9ed2a1da7cfd649` | Modified | Carries copied collection, transient instance, and world paths through diagnostic MPC update commands. |
-| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `59ff54bdbe15d4a686275d24c546ac8e3c3da41a` | Modified | Captures UObject paths on the game thread and associates them with each newly created MPC uniform-buffer generation. |
+| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `1b812409c7f143227fca8ce83c7be90323e43513` | Modified | Adds a diagnostic-only one-time path publication API and render-resource path cache. |
+| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `af7a5e24f69f0f65030076d76ec6c7474b5b5209` | Modified | Captures UObject paths once, publishes them through an ordered render command, and associates them with each newly created MPC uniform-buffer generation. |
 
 ## Current behavior
 
@@ -45,7 +45,7 @@ It records:
 - address-reuse ambiguity;
 - active-table overflow, destroyed-history eviction, event overwrite, journal queue-drop, disk-cap, flush, and write-failure counters;
 - available debug names, owner names, and externally supplied owner paths;
-- Material Parameter Collection uniform-buffer generations receive labeled `Collection=`, `Instance=`, and `World=` path records copied on the game thread; the collection path is retained in the bounded failure-time identity;
+- Material Parameter Collection uniform-buffer generations receive labeled `Collection=`, `Instance=`, and `World=` path records copied once on the game thread and cached on the render resource; the collection path is retained in the bounded failure-time identity;
 - a bounded append-only binary journal written by a below-normal-priority background thread.
 
 Selected command-use tracing is disabled by default. Enable it with:
@@ -110,11 +110,20 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 
 ## Change log
 
+### 2026-09-22 — Remove per-update MPC path-copy overhead
+
+- Replaced the first owner-association implementation before PS5 validation because it would have copied three `FString` paths through every MPC update command.
+- Added a diagnostic-only `GameThread_SetProvenancePaths` command that publishes the copied paths once and caches them on the render resource.
+- `SetCollection` publishes per-world instance paths once; default resources republish only when their uniform buffer is recreated.
+- Restored the original `GameThread_UpdateContents` and `UpdateContents` signatures and command payload for ordinary MPC parameter updates.
+- New uniform-buffer generations reuse the cached paths, so no UObject is dereferenced and no path is formatted during render/RHI destruction.
+- Updated both complete mirrored MPC files.
+
 ### 2026-09-22 — Associate MPC uniform buffers with UObject paths
 
 - Identified the failed generation as `MaterialParameterCollectionInstanceResource` and the stale access as a uniform-buffer bind during deferred `FRHICommandSetShaderParameters` execution.
-- At `UMaterialParameterCollectionInstance::DeferredUpdateRenderState`, copy `Collection->GetPathName()`, the instance `GetPathName()`, and `World->GetPathName()` while those UObjects are valid on the game thread.
-- Carry the copied strings by value through `UpdateCollectionCommand`; render/RHI code never dereferences a UObject to obtain provenance.
+- At `UMaterialParameterCollectionInstance::SetCollection`, copy `Collection->GetPathName()`, the instance `GetPathName()`, and `World->GetPathName()` while those UObjects are valid on the game thread. Default resources publish their paths when their uniform buffer is recreated.
+- Carry the copied strings once through a dedicated ordered render command and cache them on `FMaterialParameterCollectionInstanceResource`; render/RHI code never dereferences a UObject to obtain provenance.
 - Associate the three labeled paths only when a new or recreated `FUniformBufferRHIRef` generation is created, avoiding metadata work on ordinary in-place MPC updates.
 - Journal paths in `Instance=`, `World=`, `Collection=` order. The collection is stored last so the bounded destroyed identity reports the actionable asset path, while the persistent journal retains all three labeled records.
 - Cover default collection resources with `Instance=<default-resource>` and `World=<none>`.

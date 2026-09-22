@@ -930,14 +930,15 @@ void UMaterialParameterCollection::UpdateDefaultResource(bool bRecreateUniformBu
 	TArray<FVector4f> ParameterData;
 	GetDefaultParameterData(ParameterData);
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-	const FString CollectionPath = FString::Printf(TEXT("Collection=%s"), *GetPathName());
-	const FString InstancePath = TEXT("Instance=<default-resource>");
-	const FString WorldPath = TEXT("World=<none>");
-	DefaultResource->GameThread_UpdateContents(
-		StateId, ParameterData, GetFName(), CollectionPath, InstancePath, WorldPath, bRecreateUniformBuffer);
-#else
-	DefaultResource->GameThread_UpdateContents(StateId, ParameterData, GetFName(), bRecreateUniformBuffer);
+	if (bRecreateUniformBuffer)
+	{
+		DefaultResource->GameThread_SetProvenancePaths(
+			FString::Printf(TEXT("Collection=%s"), *GetPathName()),
+			TEXT("Instance=<default-resource>"),
+			TEXT("World=<none>"));
+	}
 #endif
+	DefaultResource->GameThread_UpdateContents(StateId, ParameterData, GetFName(), bRecreateUniformBuffer);
 
 	FGuid Id = StateId;
 	FMaterialParameterCollectionInstanceResource* Resource = DefaultResource;
@@ -972,6 +973,19 @@ void UMaterialParameterCollectionInstance::SetCollection(UMaterialParameterColle
 {
 	Collection = InCollection;
 	World = InWorld;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	if (Resource)
+	{
+		Resource->GameThread_SetProvenancePaths(
+			InCollection
+				? FString::Printf(TEXT("Collection=%s"), *InCollection->GetPathName())
+				: TEXT("Collection=<missing>"),
+			FString::Printf(TEXT("Instance=%s"), *GetPathName()),
+			InWorld
+				? FString::Printf(TEXT("World=%s"), *InWorld->GetPathName())
+				: TEXT("World=<missing>"));
+	}
+#endif
 }
 
 bool UMaterialParameterCollectionInstance::SetScalarParameterValue(FName ParameterName, float ParameterValue)
@@ -1112,27 +1126,7 @@ void UMaterialParameterCollectionInstance::DeferredUpdateRenderState(bool bRecre
 		// Propagate the new values to the rendering thread
 		TArray<FVector4f> ParameterData;
 		GetParameterData(ParameterData);
-#if RHI_RESOURCE_PROVENANCE_ENABLED
-		const UMaterialParameterCollection* CollectionObject = Collection.Get();
-		const UWorld* WorldObject = World.Get();
-		const FString CollectionPath = CollectionObject
-			? FString::Printf(TEXT("Collection=%s"), *CollectionObject->GetPathName())
-			: TEXT("Collection=<missing>");
-		const FString InstancePath = FString::Printf(TEXT("Instance=%s"), *GetPathName());
-		const FString WorldPath = WorldObject
-			? FString::Printf(TEXT("World=%s"), *WorldObject->GetPathName())
-			: TEXT("World=<missing>");
-		Resource->GameThread_UpdateContents(
-			CollectionObject ? CollectionObject->StateId : FGuid(),
-			ParameterData,
-			GetFName(),
-			CollectionPath,
-			InstancePath,
-			WorldPath,
-			bRecreateUniformBuffer);
-#else
 		Resource->GameThread_UpdateContents(Collection.IsValid() ? Collection->StateId : FGuid(), ParameterData, GetFName(), bRecreateUniformBuffer);
-#endif
 	}
 
 	bNeedsRenderStateUpdate = false;
@@ -1165,16 +1159,32 @@ void UMaterialParameterCollectionInstance::FinishDestroy()
 	Super::FinishDestroy();
 }
 
-void FMaterialParameterCollectionInstanceResource::GameThread_UpdateContents(
-	const FGuid& InGuid,
-	const TArray<FVector4f>& Data,
-	const FName& InOwnerName,
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-	const FString& InCollectionPath,
-	const FString& InInstancePath,
-	const FString& InWorldPath,
+void FMaterialParameterCollectionInstanceResource::GameThread_SetProvenancePaths(
+	FString InCollectionPath, FString InInstancePath, FString InWorldPath)
+{
+	if (UNLIKELY(!FApp::CanEverRender()))
+	{
+		return;
+	}
+
+	FMaterialParameterCollectionInstanceResource* Resource = this;
+	ENQUEUE_RENDER_COMMAND(UpdateCollectionProvenanceCommand)(
+		[
+			Resource,
+			CollectionPath = MoveTemp(InCollectionPath),
+			InstancePath = MoveTemp(InInstancePath),
+			WorldPath = MoveTemp(InWorldPath)](FRHICommandListImmediate&) mutable
+		{
+			Resource->ProvenanceCollectionPath = MoveTemp(CollectionPath);
+			Resource->ProvenanceInstancePath = MoveTemp(InstancePath);
+			Resource->ProvenanceWorldPath = MoveTemp(WorldPath);
+		}
+	);
+}
 #endif
-	bool bRecreateUniformBuffer)
+
+void FMaterialParameterCollectionInstanceResource::GameThread_UpdateContents(const FGuid& InGuid, const TArray<FVector4f>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer)
 {
 	if (UNLIKELY(!FApp::CanEverRender()))
 	{
@@ -1183,29 +1193,14 @@ void FMaterialParameterCollectionInstanceResource::GameThread_UpdateContents(
 
 	FMaterialParameterCollectionInstanceResource* Resource = this;
 	ENQUEUE_RENDER_COMMAND(UpdateCollectionCommand)(
-		[
-			InGuid,
-			Data,
-			InOwnerName,
-#if RHI_RESOURCE_PROVENANCE_ENABLED
-			InCollectionPath,
-			InInstancePath,
-			InWorldPath,
-#endif
-			Resource,
-			bRecreateUniformBuffer](FRHICommandListImmediate& RHICmdList)
+		[InGuid, Data, InOwnerName, Resource, bRecreateUniformBuffer](FRHICommandListImmediate& RHICmdList)
 		{
 			if (bRecreateUniformBuffer)
 			{
 				// Async RDG tasks can call FMaterialShader::SetParameters which touch material parameter collections.
 				FRDGBuilder::WaitForAsyncExecuteTask();
 			}
-#if RHI_RESOURCE_PROVENANCE_ENABLED
-			Resource->UpdateContents(
-				InGuid, Data, InOwnerName, InCollectionPath, InInstancePath, InWorldPath, bRecreateUniformBuffer);
-#else
 			Resource->UpdateContents(InGuid, Data, InOwnerName, bRecreateUniformBuffer);
-#endif
 		}
 	);
 }
@@ -1238,16 +1233,7 @@ FMaterialParameterCollectionInstanceResource::~FMaterialParameterCollectionInsta
 	check(!UniformBuffer.IsValid());
 }
 
-void FMaterialParameterCollectionInstanceResource::UpdateContents(
-	const FGuid& InId,
-	const TArray<FVector4f>& Data,
-	const FName& InOwnerName,
-#if RHI_RESOURCE_PROVENANCE_ENABLED
-	const FString& InCollectionPath,
-	const FString& InInstancePath,
-	const FString& InWorldPath,
-#endif
-	bool bRecreateUniformBuffer)
+void FMaterialParameterCollectionInstanceResource::UpdateContents(const FGuid& InId, const TArray<FVector4f>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer)
 {
 	Id = InId;
 	OwnerName = InOwnerName;
@@ -1278,9 +1264,18 @@ void FMaterialParameterCollectionInstanceResource::UpdateContents(
 				UniformBuffer->SetOwnerName(InOwnerName);
 				// Journal all three associations. Store the collection last so the bounded
 				// failure-time identity retains the most useful asset path.
-				UniformBuffer->SetProvenanceOwnerPath(*InInstancePath);
-				UniformBuffer->SetProvenanceOwnerPath(*InWorldPath);
-				UniformBuffer->SetProvenanceOwnerPath(*InCollectionPath);
+				if (!ProvenanceInstancePath.IsEmpty())
+				{
+					UniformBuffer->SetProvenanceOwnerPath(*ProvenanceInstancePath);
+				}
+				if (!ProvenanceWorldPath.IsEmpty())
+				{
+					UniformBuffer->SetProvenanceOwnerPath(*ProvenanceWorldPath);
+				}
+				if (!ProvenanceCollectionPath.IsEmpty())
+				{
+					UniformBuffer->SetProvenanceOwnerPath(*ProvenanceCollectionPath);
+				}
 			}
 #endif
 		}
