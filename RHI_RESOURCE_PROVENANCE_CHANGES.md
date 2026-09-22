@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [ffcaf2e6101fccb6c9639a2061c0c8d76b7429d5](https://github.com/d3stryr/UnrealEngine/commit/ffcaf2e6101fccb6c9639a2061c0c8d76b7429d5)
+- Source commit: [8cec9c2105654cb9d0301826ff306274ca9bb50e](https://github.com/d3stryr/UnrealEngine/commit/8cec9c2105654cb9d0301826ff306274ca9bb50e)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -18,12 +18,12 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
 | `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `4573061c1a0c08d2d4a3b6c4acd09ddf97109e2f` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, and command correlation API. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `b1245f973ab0421220c383ad3fe2cdc5a9fbc4e2` | Added | Bounded per-thread events, active/destroyed identity retention, background binary journal, lifecycle history, failure reporting, and optional command-use capture. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `1c16cfad53a76e60a362f4a987bf2d5dfefeeadc` | Added | Bounded per-thread events, active/destroyed identity retention, background binary journal, lifecycle history, failure reporting, and optional command-use capture with journal persistence. |
 | `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `d8887be077f6050b54a3db0280127f0778e8e3ed` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture with resource/flags identity fields. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
-| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `f5aa614302a7a67b93f3921a90006c3e58db1330` | Added | Streams and filters `.rhiprov` journals by generation ID, resource address, or flags address and emits readable TSV. |
+| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `84d7759b65cae804e7fecb8ed91072297161d301` | Added | Streams and filters `.rhiprov` journals by generation ID, resource address, or flags address and emits readable TSV, including correlated command-use records. |
 | `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `1b812409c7f143227fca8ce83c7be90323e43513` | Modified | Adds a diagnostic-only one-time path publication API and render-resource path cache. |
 | `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `af7a5e24f69f0f65030076d76ec6c7474b5b5209` | Modified | Captures UObject paths once, publishes them through an ordered render command, and associates them with each newly created MPC uniform-buffer generation. |
 
@@ -54,7 +54,7 @@ Selected command-use tracing is disabled by default. Enable it with:
 r.RHI.ResourceProvenance.CommandUses=1
 ```
 
-It currently covers shader resource/bindless parameters, static uniform-buffer binding, and uniform-buffer update dispatch. It does not cover every raw-pointer read, every RHI operation, or GPU execution.
+It currently covers shader resource/bindless parameters, static uniform-buffer binding, and uniform-buffer update dispatch. When enabled, `CommandEnqueue`, `CommandExecute`, `UpdateRequest`, and `UpdateExecute` records are persisted to the bounded journal with their correlation IDs. It does not cover every raw-pointer read, every RHI operation, or GPU execution.
 
 ## Failure output
 
@@ -97,7 +97,7 @@ A `PhysicalFree` event means the C++ delete expression completed. Memory Insight
 - 10,240 MiB (10 GiB) default journal cap, configurable before journal startup with `r.RHI.ResourceProvenance.JournalMaxMB`; accepted range is 16–16,384 MiB
 - 256 matching events emitted during failure reporting
 
-These limits intentionally bound memory and disk use. Event overwrites, active-table overflow, destroyed-history eviction, journal queue drops, disk-cap drops, thread-buffer exhaustion, and omitted matching events are reported. Normal AddRef/Release events remain in memory; creation, identity metadata, and decisive lifecycle operations are persisted.
+These limits intentionally bound memory and disk use. Event overwrites, active-table overflow, destroyed-history eviction, journal queue drops, disk-cap drops, thread-buffer exhaustion, and omitted matching events are reported. Normal AddRef/Release events remain in memory; creation, identity metadata, decisive lifecycle operations, and command-use operations when enabled are persisted.
 
 ## Validation status
 
@@ -106,9 +106,21 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - The first recorder revision compiled and executed on PS5, captured the `0xDD` failure, and recovered a prior valid type-18 generation at the same resource/flags addresses.
 - The active/destroyed identity and persistent-journal revision has passed source/mirror equality, delimiter/preprocessor balance, and Python decoder syntax checks, but has not yet been compiled with the PS5 SDK/toolchain.
 - The MPC owner-association revision passed source delimiter/preprocessor checks. Its two complete files are mirrored, but the revision has not yet been compiled with the PS5 SDK/toolchain.
+- The command-journal revision has exact source/mirror blob equality for the recorder and decoder; it has not yet been compiled or exercised on PS5.
 - A full diagnostic PS5 rebuild is required because the instrumented `FRHIResource` layout and RHI module implementation changed.
 
 ## Change log
+
+### 2026-09-22 — Persist correlated command-use records
+
+- The successful PS5 failure dump proved that `r.RHI.ResourceProvenance.CommandUses=1` was active: the bounded per-thread rings contained two `CommandEnqueue` records and one `CommandExecute` record with correlation `438168269141643`.
+- The decoded TSV did not contain those records because the journal predicate persisted only identity and decisive lifecycle operations. This was a recorder coverage gap, not a binary-layout or TSV-decoder corruption.
+- Added a distinct `CommandUse` journal record kind.
+- Persist `CommandEnqueue`, `CommandExecute`, `UpdateRequest`, and `UpdateExecute` records with their command correlation IDs.
+- Command records are generated only when command-use tracing is enabled; normal `AddRef` and `Release` events remain ring-only.
+- Added decoder support for the new record kind without changing the version-1 disk record layout.
+- Disk and memory use remain bounded by the existing queue, journal cap, loss counters, and per-thread buffers.
+- Updated the complete mirrored recorder and decoder files.
 
 ### 2026-09-22 — Remove per-update MPC path-copy overhead
 
