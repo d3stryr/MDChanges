@@ -285,7 +285,7 @@ namespace
 	{
 		ANSICHAR Magic[8] {};
 		uint16 Version = 1;
-		uint16 HeaderSize = sizeof(FJournalFileHeader);
+		uint16 HeaderSize = 0;
 		uint32 EndianMarker = 0x01020304;
 		uint8 PointerSize = sizeof(void*);
 		uint8 TCHARSize = sizeof(TCHAR);
@@ -301,7 +301,7 @@ namespace
 	{
 		uint32 Magic = 0x52504852; // "RHPR" in a little-endian byte stream.
 		uint16 Version = 1;
-		uint16 HeaderSize = sizeof(FJournalDiskRecordHeader);
+		uint16 HeaderSize = 0;
 		uint32 RecordSize = 0;
 		uint8 Kind = 0;
 		uint8 Operation = 0;
@@ -498,6 +498,7 @@ namespace
 
 			FJournalFileHeader Header;
 			FMemory::Memcpy(Header.Magic, "RHIPROV", 7);
+			Header.HeaderSize = static_cast<uint16>(sizeof(Header));
 			Header.StartCycles = FPlatformTime::Cycles64();
 			Header.SecondsPerCycle64 = FPlatformTime::GetSecondsPerCycle64();
 			Header.MaximumFileBytes = MaximumFileBytes;
@@ -577,7 +578,8 @@ namespace
 			const uint16 TextBytes = static_cast<uint16>(FMath::Min<int32>(ConvertedText.Length(), MAX_uint16));
 
 			FJournalDiskRecordHeader Header;
-			Header.RecordSize = sizeof(Header) + TextBytes;
+			Header.HeaderSize = static_cast<uint16>(sizeof(Header));
+			Header.RecordSize = static_cast<uint32>(sizeof(Header)) + TextBytes;
 			Header.Kind = static_cast<uint8>(Record.Kind);
 			Header.Operation = static_cast<uint8>(Record.Operation);
 			Header.ResourceType = Record.ResourceType;
@@ -606,7 +608,7 @@ namespace
 				CommitBuffer(false);
 			}
 
-			WriteBuffer.Append(reinterpret_cast<const uint8*>(&Header), sizeof(Header));
+			WriteBuffer.Append(reinterpret_cast<const uint8*>(&Header), static_cast<int32>(sizeof(Header)));
 			if (TextBytes > 0)
 			{
 				WriteBuffer.Append(reinterpret_cast<const uint8*>(ConvertedText.Get()), TextBytes);
