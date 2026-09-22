@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [47421f8c9285113680e7c98ecd8f1a479fb5849d](https://github.com/d3stryr/UnrealEngine/commit/47421f8c9285113680e7c98ecd8f1a479fb5849d)
+- Source commit: [4f1df04044d21a6f64fe244c2787963e4aad02b2](https://github.com/d3stryr/UnrealEngine/commit/4f1df04044d21a6f64fe244c2787963e4aad02b2)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -18,8 +18,8 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
 | `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `1c7492e046d36de5e57117a190073fb3e9ff871b` | Added | Non-production recorder interface, operation types, caller capture, and command correlation API. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `b483dbfd579d6ad94f2fdbdb462478360aa557fb` | Added | Bounded per-thread events, retained identity generations, lifecycle history, failure reporting, and optional command-use capture. |
-| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `2c0eba6472270ea85d67787e0f0ca14dd73d4145` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `aa1f54c5c482e8a036de02ae8b88fa5aa7bd41a6` | Added | Bounded per-thread events, retained identity generations, lifecycle history, failure reporting, and optional command-use capture. |
+| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `4a1f2f883250f62994b79efbd53554d5745f838f` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
@@ -81,6 +81,14 @@ These limits intentionally bound memory use. Event overwrites, identity eviction
 - A full Development PS5 rebuild is required because the Development layout of `FRHIResource` changed.
 
 ## Change log
+
+### 2026-09-22 — Fix PS5 uint64 format errors
+
+- The dedicated guard compiled the diagnostic code and exposed PS5 `-Werror,-Wformat` failures.
+- On this PS5 toolchain, Unreal `uint64` is `unsigned long`, while `%llu` and `%llx` require `unsigned long long`.
+- Added explicit `static_cast<unsigned long long>` conversions for every `%llu` and `%llx` diagnostic argument.
+- Fixed both the AddRef/Release assertion text and all provenance failure/event/coverage logging.
+- Updated the complete mirrored copies of `RHIResources.h` and `RHIResourceProvenance.cpp`.
 
 ### 2026-09-21 — Replace incorrect UE_BUILD_DEVELOPMENT gate
 
