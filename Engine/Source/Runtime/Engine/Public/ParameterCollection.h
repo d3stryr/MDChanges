@@ -35,6 +35,9 @@ public:
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 	/** Copy UObject identity while it is valid on the game thread, then publish it to the render thread. */
 	void GameThread_SetProvenancePaths(FString InCollectionPath, FString InInstancePath, FString InWorldPath);
+
+	/** Publish a copied higher-level reason for why this owner is about to relinquish the resource. */
+	void GameThread_RecordProvenanceReleaseOwner(FString InReleaseOwner);
 #endif
 
 	/** Destroy, called from the game thread. */

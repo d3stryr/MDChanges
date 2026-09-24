@@ -57,6 +57,9 @@ public:
 			(ParameterMapInfo.UniformBuffers.Num() 
 			+ ParameterMapInfo.TextureSamplers.Num() 
 			+ ParameterMapInfo.SRVs.Num());
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		DataSize += sizeof(uint64) * ParameterMapInfo.UniformBuffers.Num();
+#endif
 
 		// Allocate a bit for each SRV tracking whether it is a FRHITexture* or FRHIShaderResourceView*
 		DataSize += FMath::DivideAndRoundUp(ParameterMapInfo.SRVs.Num(), 8);
@@ -77,8 +80,19 @@ protected:
 
 	inline uint32 GetSamplerOffset() const
 	{
+		uint32 Offset = ParameterMapInfo.UniformBuffers.Num() * sizeof(FRHIUniformBuffer*);
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		Offset += ParameterMapInfo.UniformBuffers.Num() * sizeof(uint64);
+#endif
+		return Offset;
+	}
+
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	inline uint32 GetProvenanceOwnerOffset() const
+	{
 		return ParameterMapInfo.UniformBuffers.Num() * sizeof(FRHIUniformBuffer*);
 	}
+#endif
 
 	inline uint32 GetSRVOffset() const
 	{
@@ -150,6 +164,26 @@ public:
 			WriteBindingUniformBuffer(Value, Parameter.GetBaseIndex());
 		}
 	}
+
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	void AddWithProvenanceOwner(
+		const FShaderUniformBufferParameter& Parameter,
+		const FRHIUniformBuffer* Value,
+		uint64 OwnerKey)
+	{
+		checkfSlow(Parameter.IsInitialized(), TEXT("Parameter was not serialized"));
+
+		if (Parameter.IsBound())
+		{
+			checkf(Value, TEXT("Attempted to set null uniform buffer"));
+			UE::RHI::ResourceProvenance::RecordBindingStore(
+				Value,
+				UE::RHI::ResourceProvenance::CaptureCallerAddress());
+			WriteBindingUniformBuffer(Value, Parameter.GetBaseIndex());
+			WriteProvenanceOwnerKey(OwnerKey, Parameter.GetBaseIndex());
+		}
+	}
+#endif
 
 	void Add(FShaderResourceParameter Parameter, FRHIShaderResourceView* Value)
 	{
@@ -251,6 +285,13 @@ private:
 		return (const FRHIUniformBuffer**)(Data + GetUniformBufferOffset());
 	}
 
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	inline uint64* GetProvenanceOwnerStart() const
+	{
+		return reinterpret_cast<uint64*>(Data + GetProvenanceOwnerOffset());
+	}
+#endif
+
 	inline FRHISamplerState** GetSamplerStart() const
 	{
 		uint8* SamplerDataStart = Data + GetSamplerOffset();
@@ -318,6 +359,19 @@ private:
 
 		checkfSlow(FoundIndex >= 0, TEXT("Attempted to set a uniform buffer at BaseIndex %u which was never in the shader's parameter map."), BaseIndex);
 	}
+
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	inline void WriteProvenanceOwnerKey(uint64 OwnerKey, uint32 BaseIndex)
+	{
+		const int32 FoundIndex = FindSortedArrayBaseIndex(MakeArrayView(ParameterMapInfo.UniformBuffers), BaseIndex);
+		if (FoundIndex >= 0)
+		{
+			GetProvenanceOwnerStart()[FoundIndex] = OwnerKey;
+		}
+
+		checkfSlow(FoundIndex >= 0, TEXT("Attempted to set a provenance owner for a uniform buffer at BaseIndex %u which was never in the shader's parameter map."), BaseIndex);
+	}
+#endif
 
 	inline void WriteBindingSampler(FRHISamplerState* Value, uint32 BaseIndex)
 	{

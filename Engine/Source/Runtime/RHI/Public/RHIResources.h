@@ -175,6 +175,17 @@ public:
 			static_cast<uint8>(ResourceType),
 			InReason);
 	}
+
+	inline void RecordProvenanceReleaseOwner(const TCHAR* InOwner) const
+	{
+		UE::RHI::ResourceProvenance::RecordMarker(
+			UE::RHI::ResourceProvenance::EOperation::ReleaseOwner,
+			ProvenanceId,
+			this,
+			&AtomicFlags,
+			static_cast<uint8>(ResourceType),
+			InOwner);
+	}
 #endif
 
 #if RHI_ENABLE_RESOURCE_INFO

@@ -37,7 +37,10 @@ namespace UE::RHI::ResourceProvenance
 		OwnerAssociation,
 		ReleaseReason,
 		BindingStore,
-		InvalidUse
+		InvalidUse,
+		AccessOwner,
+		ReleaseOwner,
+		CommandOwner
 	};
 
 	FORCEINLINE uint64 CaptureCallerAddress()
@@ -97,6 +100,30 @@ namespace UE::RHI::ResourceProvenance
 	RHI_API uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CallerAddress);
 	RHI_API void RecordCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CorrelationId, uint64 CallerAddress);
 	RHI_API void RecordBindingStore(const void* ResourceAddress, uint64 CallerAddress);
+
+	/**
+	 * Registers one bounded access owner. Formatting is only needed when
+	 * bOutNeedsOwnerText is true. Returns the resource generation id, or zero when the
+	 * resource is not retained or bounded owner coverage is exhausted.
+	 */
+	RHI_API uint64 ClaimAccessOwner(
+		const void* ResourceAddress,
+		uint64 OwnerKey,
+		bool& bOutNeedsOwnerText);
+	RHI_API void RecordAccessOwner(
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		uint64 OwnerKey,
+		const TCHAR* OwnerText,
+		uint64 CallerAddress);
+
+	/**
+	 * Stages the owner for the next command enqueue of this resource on the current thread.
+	 * Cached mesh bindings carry OwnerKey beside the resource pointer through copies/moves.
+	 */
+	RHI_API void StageAccessOwner(
+		const void* ResourceAddress,
+		uint64 OwnerKey);
 
 	RHI_API void ReportInvalidAtomic(
 		const TCHAR* Reason,

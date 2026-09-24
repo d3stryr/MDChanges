@@ -789,7 +789,7 @@ void FScene::UpdateParameterCollections(const TArray<FMaterialParameterCollectio
 		{
 			if (ParameterCollection.Value.IsValid())
 			{
-				ParameterCollection.Value->RecordProvenanceReleaseReason(TEXT("FScene::UpdateParameterCollections map release"));
+				ParameterCollection.Value->RecordProvenanceReleaseOwner(TEXT("cause=SceneParameterCollectionMapRefresh"));
 			}
 		}
 #endif

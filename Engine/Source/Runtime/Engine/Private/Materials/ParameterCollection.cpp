@@ -106,11 +106,24 @@ void UMaterialParameterCollection::BeginDestroy()
 		FMaterialParameterCollectionInstanceResource* Resource = DefaultResource;
 		FGuid Id = StateId;
 		FThreadSafeBool* Released = &ReleasedByRT;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		FString ReleaseOwner = FString::Printf(TEXT("cause=MPCAssetBeginDestroy collection=%s"), *GetPathName());
+#endif
 		ENQUEUE_RENDER_COMMAND(RemoveDefaultResourceCommand)(
-			[Resource, Id, Released](FRHICommandListImmediate& RHICmdList)
+			[Resource, Id, Released
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+				, ReleaseOwner = MoveTemp(ReleaseOwner)
+#endif
+			](FRHICommandListImmediate& RHICmdList)
 			{
 				// Async RDG tasks can call FMaterialShader::SetParameters which touch material parameter collections.
 				FRDGBuilder::WaitForAsyncExecuteTask();
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+				if (FRHIUniformBuffer* UniformBuffer = Resource->GetUniformBuffer())
+				{
+					UniformBuffer->RecordProvenanceReleaseOwner(*ReleaseOwner);
+				}
+#endif
 				GDefaultMaterialParameterCollectionInstances.RemoveSingle(Id, Resource);
 				*Released = true;
 			}
@@ -130,6 +143,10 @@ void UMaterialParameterCollection::FinishDestroy()
 {
 	if (DefaultResource)
 	{
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		DefaultResource->GameThread_RecordProvenanceReleaseOwner(
+			FString::Printf(TEXT("cause=MPCAssetFinishDestroy collection=%s"), *GetPathName()));
+#endif
 		DefaultResource->GameThread_Destroy();
 		DefaultResource = nullptr;
 	}
@@ -1152,6 +1169,13 @@ void UMaterialParameterCollectionInstance::FinishDestroy()
 {
 	if (Resource)
 	{
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		Resource->GameThread_RecordProvenanceReleaseOwner(FString::Printf(
+			TEXT("cause=MPCInstanceFinishDestroy instance=%s collection=%s world=%s"),
+			*GetPathName(),
+			*GetPathNameSafe(Collection.Get()),
+			*GetPathNameSafe(World.Get())));
+#endif
 		Resource->GameThread_Destroy();
 		Resource = nullptr;
 	}
@@ -1179,6 +1203,25 @@ void FMaterialParameterCollectionInstanceResource::GameThread_SetProvenancePaths
 			Resource->ProvenanceCollectionPath = MoveTemp(CollectionPath);
 			Resource->ProvenanceInstancePath = MoveTemp(InstancePath);
 			Resource->ProvenanceWorldPath = MoveTemp(WorldPath);
+		}
+	);
+}
+
+void FMaterialParameterCollectionInstanceResource::GameThread_RecordProvenanceReleaseOwner(FString InReleaseOwner)
+{
+	if (UNLIKELY(!FApp::CanEverRender()))
+	{
+		return;
+	}
+
+	FMaterialParameterCollectionInstanceResource* Resource = this;
+	ENQUEUE_RENDER_COMMAND(RecordCollectionReleaseOwnerCommand)(
+		[Resource, ReleaseOwner = MoveTemp(InReleaseOwner)](FRHICommandListImmediate&)
+		{
+			if (Resource->UniformBuffer.IsValid())
+			{
+				Resource->UniformBuffer->RecordProvenanceReleaseOwner(*ReleaseOwner);
+			}
 		}
 	);
 }
@@ -1260,10 +1303,10 @@ void FMaterialParameterCollectionInstanceResource::UpdateContents(const FGuid& I
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 			if (UniformBuffer.IsValid())
 			{
-				UniformBuffer->RecordProvenanceReleaseReason(
+				UniformBuffer->RecordProvenanceReleaseOwner(
 					bRecreateUniformBuffer
-						? TEXT("MPC UpdateContents replacing existing uniform buffer: bRecreateUniformBuffer=true")
-						: TEXT("MPC UpdateContents replacing existing uniform buffer: existing buffer invalid"));
+						? TEXT("cause=MPCUpdateContentsReplace recreate_uniform_buffer=true")
+						: TEXT("cause=MPCUpdateContentsReplace existing_buffer_invalid=true"));
 			}
 #endif
 			FRHIUniformBufferLayoutInitializer UniformBufferLayoutInitializer(TEXT("MaterialParameterCollectionInstanceResource"));

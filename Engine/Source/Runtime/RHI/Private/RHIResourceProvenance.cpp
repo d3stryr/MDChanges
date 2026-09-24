@@ -40,6 +40,12 @@ namespace
 	static constexpr uint32 PriorityAddressProbeLimit = 64;
 	static constexpr uint32 StackFramesPerCapture = 16;
 	static constexpr uint32 PriorityOwnerPathCount = 4;
+	static constexpr uint32 PriorityAccessOwnerCount = 4;
+	static constexpr uint32 PriorityReleaseOwnerCount = 4;
+	static constexpr uint32 AccessOwnerKeyCapacity = 64;
+	static constexpr uint32 StagedAccessOwnerCapacity = 16;
+	static constexpr uint32 OwnerLabelCapacity = 8192;
+	static constexpr uint32 CommandOwnerLinkCapacity = 32768;
 	static constexpr uint32 MaxSelectiveCommandStackCaptures = 256;
 	static constexpr uint32 MaxDumpEvents = 256;
 	static constexpr uint32 JournalQueueCapacity = 16384;
@@ -53,6 +59,9 @@ namespace
 	static_assert((DestroyedIdentityCapacity & (DestroyedIdentityCapacity - 1)) == 0, "DestroyedIdentityCapacity must be a power of two.");
 	static_assert((PriorityIdentityCapacity & (PriorityIdentityCapacity - 1)) == 0, "PriorityIdentityCapacity must be a power of two.");
 	static_assert((PriorityAddressIndexCapacity & (PriorityAddressIndexCapacity - 1)) == 0, "PriorityAddressIndexCapacity must be a power of two.");
+	static_assert((AccessOwnerKeyCapacity & (AccessOwnerKeyCapacity - 1)) == 0, "AccessOwnerKeyCapacity must be a power of two.");
+	static_assert((OwnerLabelCapacity & (OwnerLabelCapacity - 1)) == 0, "OwnerLabelCapacity must be a power of two.");
+	static_assert((CommandOwnerLinkCapacity & (CommandOwnerLinkCapacity - 1)) == 0, "CommandOwnerLinkCapacity must be a power of two.");
 	static_assert((JournalQueueCapacity & (JournalQueueCapacity - 1)) == 0, "JournalQueueCapacity must be a power of two.");
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceJournal(
@@ -185,6 +194,17 @@ namespace
 		uint32 OwnerPathWriteIndex = 0;
 		TAtomicString<PathCapacity> OwnerPaths[PriorityOwnerPathCount];
 		TAtomicString<PathCapacity> LastMarker;
+		uint32 AccessOwnerWriteIndex = 0;
+		uint32 AccessOwnerKeyCount = 0;
+		uint32 AccessOwnerOmitted = 0;
+		uint64 AccessOwnerKeys[AccessOwnerKeyCapacity] {};
+		uint64 AccessOwnerLabelIds[AccessOwnerKeyCapacity] {};
+		TAtomicString<PathCapacity> AccessOwners[PriorityAccessOwnerCount];
+		uint32 ReleaseOwnerWriteIndex = 0;
+		TAtomicString<PathCapacity> ReleaseOwners[PriorityReleaseOwnerCount];
+		uint64 LastCommandOwnerKey = 0;
+		uint64 LastCommandOwnerCorrelation = 0;
+		TAtomicString<JournalTextCapacity> LastCommandOwner;
 		FStackCapture OwnerAssociationStack;
 		FStackCapture FinalReleaseStack;
 		FStackCapture PhysicalFreeStack;
@@ -197,6 +217,31 @@ namespace
 	{
 		std::atomic<uint64> ResourceAddress { 0 };
 		std::atomic<uint64> ResourceId { 0 };
+	};
+
+	struct FOwnerLabel
+	{
+		mutable std::atomic_flag Writer = ATOMIC_FLAG_INIT;
+		std::atomic<uint64> PublishedId { 0 };
+		TAtomicString<JournalTextCapacity> Text;
+	};
+
+	struct FCommandOwnerLink
+	{
+		mutable std::atomic_flag Writer = ATOMIC_FLAG_INIT;
+		std::atomic<uint64> PublishedCorrelation { 0 };
+		uint64 ResourceId = 0;
+		uint64 ResourceAddress = 0;
+		uint64 OwnerKey = 0;
+		uint64 OwnerLabelId = 0;
+	};
+
+	struct FStagedAccessOwner
+	{
+		uint64 ResourceId = 0;
+		uint64 ResourceAddress = 0;
+		uint64 OwnerKey = 0;
+		uint64 OwnerLabelId = 0;
 	};
 
 	struct FDumpEvent
@@ -784,6 +829,7 @@ namespace
 		case EOperation::UpdateRequest:
 		case EOperation::UpdateExecute:
 		case EOperation::BindingStore:
+		case EOperation::CommandOwner:
 			return true;
 		default:
 			return false;
@@ -801,6 +847,7 @@ namespace
 		case EOperation::UpdateRequest:
 		case EOperation::UpdateExecute:
 		case EOperation::BindingStore:
+		case EOperation::CommandOwner:
 			return EJournalRecordKind::CommandUse;
 		default:
 			return EJournalRecordKind::Lifecycle;
@@ -812,6 +859,8 @@ namespace
 	FIdentity GDestroyedIdentities[DestroyedIdentityCapacity];
 	FPriorityIdentity GPriorityIdentities[PriorityIdentityCapacity];
 	FPriorityAddressEntry GPriorityAddressIndex[PriorityAddressIndexCapacity];
+	FOwnerLabel GOwnerLabels[OwnerLabelCapacity];
+	FCommandOwnerLink GCommandOwnerLinks[CommandOwnerLinkCapacity];
 
 	std::atomic<uint32> GNextThreadBuffer { 0 };
 	std::atomic<uint64> GNextResourceId { 1 };
@@ -823,11 +872,23 @@ namespace
 	std::atomic<uint64> GPriorityAddressIndexOverflows { 0 };
 	std::atomic<uint64> GSelectiveCommandStackCaptures { 0 };
 	std::atomic<uint64> GSelectiveCommandStackDrops { 0 };
+	std::atomic<uint64> GAccessOwnerClaims { 0 };
+	std::atomic<uint64> GAccessOwnerOmitted { 0 };
+	std::atomic<uint64> GNextOwnerLabelId { 1 };
+	std::atomic<uint64> GOwnerLabelEvictions { 0 };
+	std::atomic<uint64> GCommandOwnerLinksStored { 0 };
+	std::atomic<uint64> GCommandOwnerLinkOverwrites { 0 };
+	std::atomic<uint64> GCommandOwnerLinkMisses { 0 };
+	std::atomic<uint64> GStagedAccessOwnerOverflows { 0 };
 
 	thread_local int32 GTlsThreadBufferIndex = -2;
 	thread_local uint32 GTlsCommandSequence = 0;
 	thread_local uint64 GTlsLastExecuteCorrelation = 0;
 	thread_local uint64 GTlsLastExecuteResourceAddress = 0;
+	thread_local uint64 GTlsLastExecuteOwnerKey = 0;
+	thread_local uint64 GTlsLastExecuteOwnerLabelId = 0;
+	thread_local uint32 GTlsStagedAccessOwnerCount = 0;
+	thread_local FStagedAccessOwner GTlsStagedAccessOwners[StagedAccessOwnerCapacity];
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceCommandUses(
 		TEXT("r.RHI.ResourceProvenance.CommandUses"),
@@ -860,6 +921,9 @@ namespace
 		case EOperation::ReleaseReason:             return TEXT("ReleaseReason");
 		case EOperation::BindingStore:              return TEXT("BindingStore");
 		case EOperation::InvalidUse:                return TEXT("InvalidUse");
+		case EOperation::AccessOwner:               return TEXT("AccessOwner");
+		case EOperation::ReleaseOwner:              return TEXT("ReleaseOwner");
+		case EOperation::CommandOwner:              return TEXT("CommandOwner");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -915,6 +979,124 @@ namespace
 	void UnlockPriorityIdentity(FPriorityIdentity& Identity)
 	{
 		Identity.Writer.clear(std::memory_order_release);
+	}
+
+	uint64 StoreOwnerLabel(const TCHAR* OwnerText)
+	{
+		const uint64 LabelId = GNextOwnerLabelId.fetch_add(1, std::memory_order_relaxed);
+		FOwnerLabel& Label = GOwnerLabels[LabelId & (OwnerLabelCapacity - 1)];
+		while (Label.Writer.test_and_set(std::memory_order_acquire))
+		{
+			FPlatformProcess::YieldThread();
+		}
+		if (Label.PublishedId.load(std::memory_order_relaxed) != 0)
+		{
+			GOwnerLabelEvictions.fetch_add(1, std::memory_order_relaxed);
+		}
+		Label.PublishedId.store(0, std::memory_order_relaxed);
+		Label.Text.Set(OwnerText);
+		Label.PublishedId.store(LabelId, std::memory_order_release);
+		Label.Writer.clear(std::memory_order_release);
+		return LabelId;
+	}
+
+	bool CopyOwnerLabel(uint64 LabelId, TCHAR (&OutText)[JournalTextCapacity])
+	{
+		OutText[0] = 0;
+		if (LabelId == 0)
+		{
+			return false;
+		}
+
+		FOwnerLabel& Label = GOwnerLabels[LabelId & (OwnerLabelCapacity - 1)];
+		while (Label.Writer.test_and_set(std::memory_order_acquire))
+		{
+			FPlatformProcess::YieldThread();
+		}
+		const bool bMatches = Label.PublishedId.load(std::memory_order_acquire) == LabelId;
+		if (bMatches)
+		{
+			Label.Text.Get(OutText);
+		}
+		Label.Writer.clear(std::memory_order_release);
+		return bMatches;
+	}
+
+	void StoreCommandOwnerLink(
+		uint64 CorrelationId,
+		uint64 ResourceId,
+		uint64 ResourceAddress,
+		uint64 OwnerKey,
+		uint64 OwnerLabelId)
+	{
+		const uint32 LinkIndex = HashPriorityValue(
+			CorrelationId ^ (ResourceAddress >> 4),
+			CommandOwnerLinkCapacity - 1);
+		FCommandOwnerLink& Link = GCommandOwnerLinks[LinkIndex];
+		while (Link.Writer.test_and_set(std::memory_order_acquire))
+		{
+			FPlatformProcess::YieldThread();
+		}
+		const uint64 PreviousCorrelation = Link.PublishedCorrelation.load(std::memory_order_relaxed);
+		if (PreviousCorrelation != 0 &&
+			(PreviousCorrelation != CorrelationId || Link.ResourceAddress != ResourceAddress))
+		{
+			GCommandOwnerLinkOverwrites.fetch_add(1, std::memory_order_relaxed);
+		}
+		Link.PublishedCorrelation.store(0, std::memory_order_relaxed);
+		Link.ResourceId = ResourceId;
+		Link.ResourceAddress = ResourceAddress;
+		Link.OwnerKey = OwnerKey;
+		Link.OwnerLabelId = OwnerLabelId;
+		Link.PublishedCorrelation.store(CorrelationId, std::memory_order_release);
+		Link.Writer.clear(std::memory_order_release);
+		GCommandOwnerLinksStored.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	bool FindCommandOwnerLink(
+		uint64 CorrelationId,
+		uint64 ResourceAddress,
+		FStagedAccessOwner& OutOwner)
+	{
+		const uint32 LinkIndex = HashPriorityValue(
+			CorrelationId ^ (ResourceAddress >> 4),
+			CommandOwnerLinkCapacity - 1);
+		FCommandOwnerLink& Link = GCommandOwnerLinks[LinkIndex];
+		while (Link.Writer.test_and_set(std::memory_order_acquire))
+		{
+			FPlatformProcess::YieldThread();
+		}
+		const bool bMatches =
+			Link.PublishedCorrelation.load(std::memory_order_acquire) == CorrelationId &&
+			Link.ResourceAddress == ResourceAddress;
+		if (bMatches)
+		{
+			OutOwner.ResourceId = Link.ResourceId;
+			OutOwner.ResourceAddress = Link.ResourceAddress;
+			OutOwner.OwnerKey = Link.OwnerKey;
+			OutOwner.OwnerLabelId = Link.OwnerLabelId;
+		}
+		Link.Writer.clear(std::memory_order_release);
+		return bMatches;
+	}
+
+	bool ConsumeStagedAccessOwner(
+		uint64 ResourceId,
+		uint64 ResourceAddress,
+		FStagedAccessOwner& OutOwner)
+	{
+		for (uint32 Index = 0; Index < GTlsStagedAccessOwnerCount; ++Index)
+		{
+			const FStagedAccessOwner& Candidate = GTlsStagedAccessOwners[Index];
+			if (Candidate.ResourceId == ResourceId && Candidate.ResourceAddress == ResourceAddress)
+			{
+				OutOwner = Candidate;
+				GTlsStagedAccessOwners[Index] = GTlsStagedAccessOwners[GTlsStagedAccessOwnerCount - 1];
+				--GTlsStagedAccessOwnerCount;
+				return true;
+			}
+		}
+		return false;
 	}
 
 	FPriorityIdentity* FindPriorityIdentity(uint64 ResourceId)
@@ -1126,6 +1308,29 @@ namespace
 			ClaimedIdentity->OwnerPathWriteIndex = 1;
 		}
 		ClaimedIdentity->LastMarker.Set(TEXT("owner association retained"));
+		ClaimedIdentity->AccessOwnerWriteIndex = 0;
+		ClaimedIdentity->AccessOwnerKeyCount = 0;
+		ClaimedIdentity->AccessOwnerOmitted = 0;
+		for (uint64& AccessOwnerKey : ClaimedIdentity->AccessOwnerKeys)
+		{
+			AccessOwnerKey = 0;
+		}
+		for (uint64& AccessOwnerLabelId : ClaimedIdentity->AccessOwnerLabelIds)
+		{
+			AccessOwnerLabelId = 0;
+		}
+		for (TAtomicString<PathCapacity>& AccessOwner : ClaimedIdentity->AccessOwners)
+		{
+			AccessOwner.Set(nullptr);
+		}
+		ClaimedIdentity->ReleaseOwnerWriteIndex = 0;
+		for (TAtomicString<PathCapacity>& ReleaseOwner : ClaimedIdentity->ReleaseOwners)
+		{
+			ReleaseOwner.Set(nullptr);
+		}
+		ClaimedIdentity->LastCommandOwnerKey = 0;
+		ClaimedIdentity->LastCommandOwnerCorrelation = 0;
+		ClaimedIdentity->LastCommandOwner.Set(nullptr);
 		ClaimedIdentity->OwnerAssociationStack = AssociationStack;
 		ClaimedIdentity->FinalReleaseStack = {};
 		ClaimedIdentity->PhysicalFreeStack = {};
@@ -1470,6 +1675,9 @@ namespace
 			TCHAR OwnerPath[PathCapacity] {};
 			TCHAR OwnerPaths[PriorityOwnerPathCount][PathCapacity] {};
 			TCHAR LastMarker[PathCapacity] {};
+			TCHAR AccessOwners[PriorityAccessOwnerCount][PathCapacity] {};
+			TCHAR ReleaseOwners[PriorityReleaseOwnerCount][PathCapacity] {};
+			TCHAR LastCommandOwner[JournalTextCapacity] {};
 			Identity.DebugName.Get(DebugName);
 			Identity.OwnerName.Get(OwnerName);
 			Identity.OwnerPath.Get(OwnerPath);
@@ -1479,6 +1687,21 @@ namespace
 			}
 			const uint32 OwnerPathWriteIndex = Identity.OwnerPathWriteIndex;
 			Identity.LastMarker.Get(LastMarker);
+			for (uint32 OwnerIndex = 0; OwnerIndex < PriorityAccessOwnerCount; ++OwnerIndex)
+			{
+				Identity.AccessOwners[OwnerIndex].Get(AccessOwners[OwnerIndex]);
+			}
+			for (uint32 OwnerIndex = 0; OwnerIndex < PriorityReleaseOwnerCount; ++OwnerIndex)
+			{
+				Identity.ReleaseOwners[OwnerIndex].Get(ReleaseOwners[OwnerIndex]);
+			}
+			const uint32 AccessOwnerWriteIndex = Identity.AccessOwnerWriteIndex;
+			const uint32 AccessOwnerKeyCount = Identity.AccessOwnerKeyCount;
+			const uint32 AccessOwnerOmitted = Identity.AccessOwnerOmitted;
+			const uint32 ReleaseOwnerWriteIndex = Identity.ReleaseOwnerWriteIndex;
+			const uint64 LastCommandOwnerKey = Identity.LastCommandOwnerKey;
+			const uint64 LastCommandOwnerCorrelation = Identity.LastCommandOwnerCorrelation;
+			Identity.LastCommandOwner.Get(LastCommandOwner);
 			const uint64 CreateCaller = Identity.CreateCaller.load(std::memory_order_relaxed);
 			const uint32 ResourceType = Identity.ResourceType.load(std::memory_order_relaxed);
 			const EOperation LastOperation = static_cast<EOperation>(Identity.LastOperation.load(std::memory_order_relaxed));
@@ -1521,6 +1744,51 @@ namespace
 					OwnerPaths[PathSlot][0] ? OwnerPaths[PathSlot] : TEXT("<missing>"));
 			}
 
+			const uint32 RetainedAccessOwnerCount = AccessOwnerWriteIndex < PriorityAccessOwnerCount
+				? AccessOwnerWriteIndex
+				: PriorityAccessOwnerCount;
+			const uint32 FirstAccessOwnerSequence = AccessOwnerWriteIndex > PriorityAccessOwnerCount
+				? AccessOwnerWriteIndex - PriorityAccessOwnerCount
+				: 0;
+			for (uint32 OwnerSequence = FirstAccessOwnerSequence; OwnerSequence < AccessOwnerWriteIndex; ++OwnerSequence)
+			{
+				const uint32 OwnerSlot = OwnerSequence % PriorityAccessOwnerCount;
+				UE_LOG(LogRHI, Error,
+					TEXT("RHI provenance retained access owner: id=%llu sequence=%u retained=%u/%u unique_claims=%u omitted=%u owner='%s'"),
+					static_cast<unsigned long long>(IdentityId),
+					OwnerSequence + 1,
+					RetainedAccessOwnerCount,
+					AccessOwnerWriteIndex,
+					AccessOwnerKeyCount,
+					AccessOwnerOmitted,
+					AccessOwners[OwnerSlot][0] ? AccessOwners[OwnerSlot] : TEXT("<missing>"));
+			}
+
+			const uint32 RetainedReleaseOwnerCount = ReleaseOwnerWriteIndex < PriorityReleaseOwnerCount
+				? ReleaseOwnerWriteIndex
+				: PriorityReleaseOwnerCount;
+			const uint32 FirstReleaseOwnerSequence = ReleaseOwnerWriteIndex > PriorityReleaseOwnerCount
+				? ReleaseOwnerWriteIndex - PriorityReleaseOwnerCount
+				: 0;
+			for (uint32 OwnerSequence = FirstReleaseOwnerSequence; OwnerSequence < ReleaseOwnerWriteIndex; ++OwnerSequence)
+			{
+				const uint32 OwnerSlot = OwnerSequence % PriorityReleaseOwnerCount;
+				UE_LOG(LogRHI, Error,
+					TEXT("RHI provenance retained release owner: id=%llu sequence=%u retained=%u/%u owner='%s'"),
+					static_cast<unsigned long long>(IdentityId),
+					OwnerSequence + 1,
+					RetainedReleaseOwnerCount,
+					ReleaseOwnerWriteIndex,
+					ReleaseOwners[OwnerSlot][0] ? ReleaseOwners[OwnerSlot] : TEXT("<missing>"));
+			}
+
+			UE_LOG(LogRHI, Error,
+				TEXT("RHI provenance exact command owner: id=%llu correlation=%llu owner_key=0x%llx owner='%s'"),
+				static_cast<unsigned long long>(IdentityId),
+				static_cast<unsigned long long>(LastCommandOwnerCorrelation),
+				static_cast<unsigned long long>(LastCommandOwnerKey),
+				LastCommandOwner[0] ? LastCommandOwner : TEXT("<unresolved-or-evicted>"));
+
 			DumpPriorityStack(TEXT("owner-association"), EOperation::OwnerAssociation, IdentityId, OwnerAssociationStack);
 			DumpPriorityStack(TEXT("final-release"), EOperation::FinalRelease, IdentityId, FinalReleaseStack);
 			DumpPriorityStack(TEXT("physical-free"), EOperation::PhysicalFree, IdentityId, PhysicalFreeStack);
@@ -1530,14 +1798,21 @@ namespace
 		}
 
 		UE_LOG(LogRHI, Error,
-			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu"),
+			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu"),
 			MatchCount,
 			AddressGenerationCount,
 			PriorityIdentityCapacity,
 			static_cast<unsigned long long>(GPriorityIdentityOverflows.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GPriorityAddressIndexOverflows.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GSelectiveCommandStackCaptures.load(std::memory_order_relaxed)),
-			static_cast<unsigned long long>(GSelectiveCommandStackDrops.load(std::memory_order_relaxed)));
+			static_cast<unsigned long long>(GSelectiveCommandStackDrops.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GAccessOwnerClaims.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GAccessOwnerOmitted.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GOwnerLabelEvictions.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GCommandOwnerLinksStored.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GCommandOwnerLinkOverwrites.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GCommandOwnerLinkMisses.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GStagedAccessOwnerOverflows.load(std::memory_order_relaxed)));
 
 		if (AddressGenerationCount > 1)
 		{
@@ -1946,7 +2221,20 @@ void RecordMarker(
 		LockPriorityIdentity(*Identity);
 		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
 		{
-			Identity->LastMarker.Set(Text);
+			if (Operation == EOperation::AccessOwner)
+			{
+				const uint32 OwnerIndex = Identity->AccessOwnerWriteIndex++;
+				Identity->AccessOwners[OwnerIndex % PriorityAccessOwnerCount].Set(Text);
+			}
+			else if (Operation == EOperation::ReleaseOwner)
+			{
+				const uint32 OwnerIndex = Identity->ReleaseOwnerWriteIndex++;
+				Identity->ReleaseOwners[OwnerIndex % PriorityReleaseOwnerCount].Set(Text);
+			}
+			else
+			{
+				Identity->LastMarker.Set(Text);
+			}
 		}
 		UnlockPriorityIdentity(*Identity);
 	}
@@ -2090,11 +2378,80 @@ void RecordCommandUse(EOperation Operation, const void* ResourceAddress, uint64 
 		{
 			GTlsLastExecuteCorrelation = CorrelationId;
 			GTlsLastExecuteResourceAddress = reinterpret_cast<uint64>(ResourceAddress);
+			GTlsLastExecuteOwnerKey = 0;
+			GTlsLastExecuteOwnerLabelId = 0;
 		}
 
 		FPriorityToken Token;
 		if (ResolvePriorityToken(ResourceAddress, Token))
 		{
+			if (Operation == EOperation::CommandEnqueue)
+			{
+				FStagedAccessOwner StagedOwner;
+				if (ConsumeStagedAccessOwner(
+					Token.ResourceId,
+					reinterpret_cast<uint64>(ResourceAddress),
+					StagedOwner))
+				{
+					StoreCommandOwnerLink(
+						CorrelationId,
+						Token.ResourceId,
+						reinterpret_cast<uint64>(ResourceAddress),
+						StagedOwner.OwnerKey,
+						StagedOwner.OwnerLabelId);
+					Record(
+						EOperation::CommandOwner,
+						ResourceAddress,
+						reinterpret_cast<const void*>(Token.FlagsAddress),
+						Token.ResourceId,
+						Token.ResourceType,
+						static_cast<uint32>(StagedOwner.OwnerLabelId),
+						StagedOwner.OwnerKey,
+						CorrelationId);
+				}
+			}
+			else if (Operation == EOperation::CommandExecute)
+			{
+				FStagedAccessOwner CommandOwner;
+				if (FindCommandOwnerLink(
+					CorrelationId,
+					reinterpret_cast<uint64>(ResourceAddress),
+					CommandOwner))
+				{
+					GTlsLastExecuteOwnerKey = CommandOwner.OwnerKey;
+					GTlsLastExecuteOwnerLabelId = CommandOwner.OwnerLabelId;
+					if (FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId))
+					{
+						TCHAR OwnerText[JournalTextCapacity] {};
+						const bool bHasOwnerText = CopyOwnerLabel(CommandOwner.OwnerLabelId, OwnerText);
+						LockPriorityIdentity(*Identity);
+						if (Identity->ResourceId.load(std::memory_order_relaxed) == Token.ResourceId)
+						{
+							Identity->LastCommandOwnerKey = CommandOwner.OwnerKey;
+							Identity->LastCommandOwnerCorrelation = CorrelationId;
+							Identity->LastCommandOwner.Set(
+								bHasOwnerText ? OwnerText : TEXT("<owner-label-evicted>"));
+						}
+						UnlockPriorityIdentity(*Identity);
+					}
+				}
+				else
+				{
+					GCommandOwnerLinkMisses.fetch_add(1, std::memory_order_relaxed);
+					if (FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId))
+					{
+						LockPriorityIdentity(*Identity);
+						if (Identity->ResourceId.load(std::memory_order_relaxed) == Token.ResourceId)
+						{
+							Identity->LastCommandOwnerKey = 0;
+							Identity->LastCommandOwnerCorrelation = CorrelationId;
+							Identity->LastCommandOwner.Set(TEXT("<command-owner-link-missed>"));
+						}
+						UnlockPriorityIdentity(*Identity);
+					}
+				}
+			}
+
 			Record(
 				Operation,
 				ResourceAddress,
@@ -2146,6 +2503,250 @@ void RecordBindingStore(const void* ResourceAddress, uint64 CallerAddress)
 	}
 }
 
+uint64 ClaimAccessOwner(
+	const void* ResourceAddress,
+	uint64 OwnerKey,
+	bool& bOutNeedsOwnerText)
+{
+	bOutNeedsOwnerText = false;
+	if (CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() == 0)
+	{
+		return 0;
+	}
+
+	if (OwnerKey == 0)
+	{
+		OwnerKey = 1;
+	}
+
+	FPriorityToken Token;
+	if (!ResolvePriorityToken(ResourceAddress, Token))
+	{
+		return 0;
+	}
+
+	FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId);
+	if (!Identity)
+	{
+		return 0;
+	}
+
+	bool bOwnerClaimed = false;
+	bool bOwnerCoverageExhaustedNow = false;
+	bool bGenerationMatches = false;
+	LockPriorityIdentity(*Identity);
+	if (Identity->ResourceId.load(std::memory_order_relaxed) == Token.ResourceId &&
+		Identity->ResourceAddress.load(std::memory_order_relaxed) == reinterpret_cast<uint64>(ResourceAddress))
+	{
+		bGenerationMatches = true;
+		const uint32 OwnerStartIndex = HashPriorityValue(OwnerKey, AccessOwnerKeyCapacity - 1);
+		for (uint32 Probe = 0; Probe < AccessOwnerKeyCapacity; ++Probe)
+		{
+			uint64& CandidateKey = Identity->AccessOwnerKeys[(OwnerStartIndex + Probe) & (AccessOwnerKeyCapacity - 1)];
+			if (CandidateKey == OwnerKey)
+			{
+				break;
+			}
+			if (CandidateKey == 0)
+			{
+				CandidateKey = OwnerKey;
+				++Identity->AccessOwnerKeyCount;
+				bOwnerClaimed = true;
+				bOutNeedsOwnerText = true;
+				break;
+			}
+		}
+
+		if (!bOwnerClaimed)
+		{
+			bool bOwnerFound = false;
+			for (uint32 Probe = 0; Probe < AccessOwnerKeyCapacity; ++Probe)
+			{
+				const uint64 CandidateKey = Identity->AccessOwnerKeys[(OwnerStartIndex + Probe) & (AccessOwnerKeyCapacity - 1)];
+				if (CandidateKey == OwnerKey)
+				{
+					bOwnerFound = true;
+					break;
+				}
+				if (CandidateKey == 0)
+				{
+					break;
+				}
+			}
+			if (!bOwnerFound)
+			{
+				if (Identity->AccessOwnerOmitted == 0)
+				{
+					Identity->AccessOwnerOmitted = 1;
+					bOwnerCoverageExhaustedNow = true;
+				}
+				bGenerationMatches = false;
+			}
+		}
+	}
+	UnlockPriorityIdentity(*Identity);
+
+	if (bOwnerCoverageExhaustedNow)
+	{
+		GAccessOwnerOmitted.fetch_add(1, std::memory_order_relaxed);
+	}
+	if (bOwnerClaimed)
+	{
+		GAccessOwnerClaims.fetch_add(1, std::memory_order_relaxed);
+	}
+	return bGenerationMatches ? Token.ResourceId : 0;
+}
+
+void RecordAccessOwner(
+	uint64 ResourceId,
+	const void* ResourceAddress,
+	uint64 OwnerKey,
+	const TCHAR* OwnerText,
+	uint64 CallerAddress)
+{
+	FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId);
+	if (!Identity)
+	{
+		return;
+	}
+
+	const uint64 OwnerLabelId = StoreOwnerLabel(OwnerText);
+	uint64 FlagsAddress = 0;
+	uint8 ResourceType = 0xff;
+	bool bMatches = false;
+	LockPriorityIdentity(*Identity);
+	if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId &&
+		Identity->ResourceAddress.load(std::memory_order_relaxed) == reinterpret_cast<uint64>(ResourceAddress))
+	{
+		FlagsAddress = Identity->FlagsAddress.load(std::memory_order_relaxed);
+		ResourceType = static_cast<uint8>(Identity->ResourceType.load(std::memory_order_relaxed));
+		const uint32 OwnerStartIndex = HashPriorityValue(OwnerKey, AccessOwnerKeyCapacity - 1);
+		for (uint32 Probe = 0; Probe < AccessOwnerKeyCapacity; ++Probe)
+		{
+			const uint32 OwnerIndex = (OwnerStartIndex + Probe) & (AccessOwnerKeyCapacity - 1);
+			const uint64 CandidateKey = Identity->AccessOwnerKeys[OwnerIndex];
+			if (CandidateKey == OwnerKey)
+			{
+				Identity->AccessOwnerLabelIds[OwnerIndex] = OwnerLabelId;
+				const uint32 RetainedIndex = Identity->AccessOwnerWriteIndex++;
+				Identity->AccessOwners[RetainedIndex % PriorityAccessOwnerCount].Set(OwnerText);
+				bMatches = true;
+				break;
+			}
+			if (CandidateKey == 0)
+			{
+				break;
+			}
+		}
+	}
+	UnlockPriorityIdentity(*Identity);
+
+	if (!bMatches)
+	{
+		return;
+	}
+
+	FJournalQueueRecord JournalRecord = MakeJournalRecord(
+		EJournalRecordKind::Marker,
+		EOperation::AccessOwner,
+		ResourceAddress,
+		reinterpret_cast<const void*>(FlagsAddress),
+		ResourceId,
+		ResourceType,
+		0,
+		CallerAddress,
+		OwnerKey);
+	CopyJournalText(JournalRecord, OwnerText);
+	GJournalWriter.Enqueue(JournalRecord);
+
+	Record(
+		EOperation::AccessOwner,
+		ResourceAddress,
+		reinterpret_cast<const void*>(FlagsAddress),
+		ResourceId,
+		ResourceType,
+		0,
+		CallerAddress,
+		OwnerKey);
+}
+
+void StageAccessOwner(
+	const void* ResourceAddress,
+	uint64 OwnerKey)
+{
+	if (CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() == 0)
+	{
+		return;
+	}
+
+	FPriorityToken Token;
+	if (!ResolvePriorityToken(ResourceAddress, Token))
+	{
+		return;
+	}
+
+	FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId);
+	if (!Identity)
+	{
+		return;
+	}
+
+	uint64 OwnerLabelId = 0;
+	LockPriorityIdentity(*Identity);
+	if (Identity->ResourceId.load(std::memory_order_relaxed) == Token.ResourceId &&
+		Identity->ResourceAddress.load(std::memory_order_relaxed) == reinterpret_cast<uint64>(ResourceAddress))
+	{
+		if (OwnerKey != 0)
+		{
+			const uint32 OwnerStartIndex = HashPriorityValue(OwnerKey, AccessOwnerKeyCapacity - 1);
+			for (uint32 Probe = 0; Probe < AccessOwnerKeyCapacity; ++Probe)
+			{
+				const uint32 OwnerIndex = (OwnerStartIndex + Probe) & (AccessOwnerKeyCapacity - 1);
+				const uint64 CandidateKey = Identity->AccessOwnerKeys[OwnerIndex];
+				if (CandidateKey == OwnerKey)
+				{
+					OwnerLabelId = Identity->AccessOwnerLabelIds[OwnerIndex];
+					break;
+				}
+				if (CandidateKey == 0)
+				{
+					break;
+				}
+			}
+		}
+	}
+	UnlockPriorityIdentity(*Identity);
+
+	if (OwnerKey == 0)
+	{
+		return;
+	}
+
+	for (uint32 Index = 0; Index < GTlsStagedAccessOwnerCount; ++Index)
+	{
+		FStagedAccessOwner& Existing = GTlsStagedAccessOwners[Index];
+		if (Existing.ResourceId == Token.ResourceId &&
+			Existing.ResourceAddress == reinterpret_cast<uint64>(ResourceAddress))
+		{
+			Existing.OwnerKey = OwnerKey;
+			Existing.OwnerLabelId = OwnerLabelId;
+			return;
+		}
+	}
+
+	if (GTlsStagedAccessOwnerCount >= StagedAccessOwnerCapacity)
+	{
+		GStagedAccessOwnerOverflows.fetch_add(1, std::memory_order_relaxed);
+		return;
+	}
+
+	FStagedAccessOwner& StagedOwner = GTlsStagedAccessOwners[GTlsStagedAccessOwnerCount++];
+	StagedOwner.ResourceId = Token.ResourceId;
+	StagedOwner.ResourceAddress = reinterpret_cast<uint64>(ResourceAddress);
+	StagedOwner.OwnerKey = OwnerKey;
+	StagedOwner.OwnerLabelId = OwnerLabelId;
+}
+
 void ReportInvalidAtomic(
 	const TCHAR* Reason,
 	const void* ResourceAddress,
@@ -2163,6 +2764,25 @@ void ReportInvalidAtomic(
 	const uint64 FailureCorrelationId = GTlsLastExecuteResourceAddress == reinterpret_cast<uint64>(ResourceAddress)
 		? GTlsLastExecuteCorrelation
 		: 0;
+	const uint64 FailureOwnerKey = FailureCorrelationId != 0 ? GTlsLastExecuteOwnerKey : 0;
+	const uint64 FailureOwnerLabelId = FailureCorrelationId != 0 ? GTlsLastExecuteOwnerLabelId : 0;
+	TCHAR FailureOwnerText[JournalTextCapacity] {};
+	bool bHasFailureOwnerText = CopyOwnerLabel(FailureOwnerLabelId, FailureOwnerText);
+	if (!bHasFailureOwnerText && FailureResourceId != 0)
+	{
+		if (FPriorityIdentity* Identity = FindPriorityIdentity(FailureResourceId))
+		{
+			LockPriorityIdentity(*Identity);
+			if (Identity->ResourceId.load(std::memory_order_relaxed) == FailureResourceId &&
+				Identity->LastCommandOwnerCorrelation == FailureCorrelationId &&
+				Identity->LastCommandOwnerKey == FailureOwnerKey)
+			{
+				Identity->LastCommandOwner.Get(FailureOwnerText);
+				bHasFailureOwnerText = FailureOwnerText[0] != 0;
+			}
+			UnlockPriorityIdentity(*Identity);
+		}
+	}
 	FStackCapture FailureStack = CaptureRawStack();
 	FailureStack.CorrelationId = FailureCorrelationId;
 	JournalStack(
@@ -2199,11 +2819,13 @@ void ReportInvalidAtomic(
 		static_cast<unsigned long long>(CallerAddress));
 
 	UE_LOG(LogRHI, Error,
-		TEXT("RHI provenance invalid-use context: retained_identity=%s recovered_id=%llu recovered_type=%u last_execute_correlation=%llu"),
+		TEXT("RHI provenance invalid-use context: retained_identity=%s recovered_id=%llu recovered_type=%u last_execute_correlation=%llu command_owner_key=0x%llx command_owner='%s'"),
 		bHasRetainedToken ? TEXT("yes") : TEXT("no"),
 		static_cast<unsigned long long>(FailureResourceId),
 		FailureResourceType,
-		static_cast<unsigned long long>(FailureCorrelationId));
+		static_cast<unsigned long long>(FailureCorrelationId),
+		static_cast<unsigned long long>(FailureOwnerKey),
+		bHasFailureOwnerText ? FailureOwnerText : TEXT("<unresolved-or-evicted>"));
 	DumpPriorityStack(TEXT("invalid-use"), EOperation::InvalidUse, FailureResourceId, FailureStack);
 	DumpPriorityMatches(ResourceAddress, FlagsAddress, ObservedResourceId);
 	DumpIdentityMatches(ResourceAddress, FlagsAddress, ObservedResourceId);

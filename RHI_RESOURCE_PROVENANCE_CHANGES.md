@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [8cec9c2105654cb9d0301826ff306274ca9bb50e](https://github.com/d3stryr/UnrealEngine/commit/8cec9c2105654cb9d0301826ff306274ca9bb50e)
+- Source commit: [b3874a9a918610328c1d61fdca03e5abd48ab258](https://github.com/d3stryr/UnrealEngine/commit/b3874a9a918610328c1d61fdca03e5abd48ab258)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -17,15 +17,22 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | File | Source blob | Status | Purpose |
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
-| `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `4573061c1a0c08d2d4a3b6c4acd09ddf97109e2f` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, and command correlation API. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `1c16cfad53a76e60a362f4a987bf2d5dfefeeadc` | Added | Bounded per-thread events, active/destroyed identity retention, background binary journal, lifecycle history, failure reporting, and optional command-use capture with journal persistence. |
-| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `d8887be077f6050b54a3db0280127f0778e8e3ed` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, and name/owner capture with resource/flags identity fields. |
+| `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `426d49a760fc38808088f6fa0034d178d36dbd09` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, owner tokens, and command correlation API. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `d2498449e091fc20f0fad660324b248498213577` | Added | Bounded per-thread events, retained identities, background journal, lifecycle/release owners, and access-owner-to-command correlation. |
+| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `2a818afce7a330bfeb67a26314cd2d362e1acac2` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, name/owner capture, and copied release-owner markers. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
-| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `84d7759b65cae804e7fecb8ed91072297161d301` | Added | Streams and filters `.rhiprov` journals by generation ID, resource address, or flags address and emits readable TSV, including correlated command-use records. |
-| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `1b812409c7f143227fca8ce83c7be90323e43513` | Modified | Adds a diagnostic-only one-time path publication API and render-resource path cache. |
-| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `af7a5e24f69f0f65030076d76ec6c7474b5b5209` | Modified | Captures UObject paths once, publishes them through an ordered render command, and associates them with each newly created MPC uniform-buffer generation. |
+| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `3c0e682e9b717b3fef6a26442f390d80db3ae38b` | Added | Filters journals and emits TSV with `AccessOwner`, `ReleaseOwner`, `CommandOwner`, owner key, and command correlation columns. |
+| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `1437b0a0615b0d92d5fc448f42f1ed13652d9ff3` | Modified | Adds diagnostic path publication and release-owner APIs to the MPC render resource. |
+| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `fa2de0149ca9d9edcd85c12d1b9c472389b44399` | Modified | Captures MPC paths, labels destruction/replacement paths, and associates each uniform-buffer generation. |
+| `Engine/Source/Runtime/Engine/Private/World.cpp` | `f78fb1857f489aa63d94f7e05533fe3bee4ed388` | Modified | Records whether a per-world MPC instance was replaced or removed after GC because its weak collection became invalid. |
+| `Engine/Source/Runtime/Renderer/Private/ShaderBaseClasses.cpp` | `a1c4367611c64fd8f0479104a474e53705449a58` | Modified | Captures bounded material/render-proxy owner labels and writes compact owner tokens into MPC mesh bindings. |
+| `Engine/Source/Runtime/Renderer/Public/MaterialShader.h` | `73a09ee6afb8a11792b8ccd8f0517707fa497c4b` | Modified | Carries optional mesh context into diagnostic MPC binding-owner capture without changing existing callers. |
+| `Engine/Source/Runtime/Renderer/Private/RendererScene.cpp` | `93eb949e133a176fa6d9260597207e470e11f026` | Modified | Identifies scene parameter-collection map refreshes as release-owner events. |
+| `Engine/Source/Runtime/Renderer/Public/MeshDrawShaderBindings.h` | `809fe83d898038f71eed4d611a2f42b8fc32478e` | Modified | Records binding-store provenance and carries a copied `uint64` owner token beside each diagnostic uniform-buffer binding. |
+| `Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h` | `d5e190c59cee4b1711b75fda583f58dac4379302` | Modified | Exposes the diagnostic owner-token sidecar carried with cached mesh uniform-buffer bindings. |
+| `Engine/Source/Runtime/Renderer/Private/MeshPassProcessor.cpp` | `d01e7ccc417975c935d42724d21b8c765d63ff87` | Modified | Stages the copied material-owner token immediately before the matching uniform buffer is submitted to an RHI command. |
 
 ## Current behavior
 
@@ -45,6 +52,10 @@ It records:
 - address-reuse ambiguity;
 - active-table overflow, destroyed-history eviction, event overwrite, journal queue-drop, disk-cap, flush, and write-failure counters;
 - available debug names, owner names, and externally supplied owner paths;
+- bounded, deduplicated MPC access-owner labels containing material path, render proxy, collection GUID, and immediate/cached binding source;
+- a compact material-owner token stored beside cached mesh uniform-buffer pointers, copied through existing mesh-binding copies/moves, and linked to the exact deferred-command correlation ID;
+- assertion-time `command_owner_key` and copied `command_owner` output, with explicit label-eviction, link-overwrite, link-miss, staging-overflow, and owner-set saturation counters;
+- explicit MPC release-owner labels distinguishing world post-GC removal, world instance replacement, UObject destruction, scene-map refresh, and uniform-buffer replacement;
 - Material Parameter Collection uniform-buffer generations receive labeled `Collection=`, `Instance=`, and `World=` path records copied once on the game thread and cached on the render resource; the collection path is retained in the bounded failure-time identity;
 - a bounded append-only binary journal written by a below-normal-priority background thread.
 
@@ -93,6 +104,10 @@ A `PhysicalFree` event means the C++ delete expression completed. Memory Insight
 - 32,768 recently destroyed identity generations
 - 8 lifecycle events per active/destroyed identity
 - 16,384 preallocated journal queue records
+- up to 64 deduplicated access-owner identities per retained priority generation; the four most recent labels are retained for crash-time output and accepted labels are journaled
+- 8,192 copied access-owner labels and 32,768 command-owner correlation links; both are fixed-capacity and report eviction/overwrite/miss coverage
+- 16 staged owner tokens per producer thread; overflow is counted, and cached mesh binding data carries one diagnostic `uint64` owner token per uniform-buffer slot
+- four recent release-owner labels per retained priority generation
 - 256 KiB background write buffer
 - 10,240 MiB (10 GiB) default journal cap, configurable before journal startup with `r.RHI.ResourceProvenance.JournalMaxMB`; accepted range is 16–16,384 MiB
 - 256 matching events emitted during failure reporting
@@ -110,6 +125,21 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - A full diagnostic PS5 rebuild is required because the instrumented `FRHIResource` layout and RHI module implementation changed.
 
 ## Change log
+
+### 2026-09-24 — Capture MPC access owners and release owners
+
+- The GameInstance hard reference to `MPC_GlobalEnvironment` stopped the crash, strongly indicating that unloading the collection asset allowed its per-world instance/resource to be removed while a stale render-side reference survived.
+- Added `AccessOwner` and `ReleaseOwner` operations without changing the version-1 journal record layout.
+- Added `CommandOwner` without changing the version-1 journal layout. `AccessOwner` and `CommandOwner` rows expose the same `owner_key`, while `CommandOwner` also carries the deferred command correlation.
+- MPC material access capture runs only when `r.RHI.ResourceProvenance.CommandUses=1` and only for already promoted owner-associated resources.
+- Access owners are deduplicated by material render proxy and access source. Each retained generation accepts at most 64 unique material owners, journals each accepted label, keeps the four most recent labels for assertion-time output, and reports saturation explicitly.
+- Cached mesh bindings store a diagnostic `uint64` owner token beside each uniform-buffer pointer. Existing binding copy/move operations carry both together; command submission stages the token and the RHI recorder links it to `CommandEnqueue`/`CommandExecute` correlation.
+- Dynamic-instancing equality and hashes intentionally ignore the diagnostic token to avoid changing batching and draw counts. If UE merges equivalent draw commands, the exact command token is the retained representative material owner; all accepted material-owner candidates remain in the journal.
+- Added release-owner markers for `UWorld::OnPostGC` invalid-collection removal, `UWorld::CreateParameterCollectionInstance` replacement, MPC asset/instance destruction, scene parameter-map refresh, and MPC uniform-buffer replacement.
+- Higher-level strings are copied while valid. Render/RHI failure reporting reads only independent retained storage and does not dereference a freed resource or UObject.
+- Added decoder `--contains` filtering so `MPC_GlobalEnvironment` can be found by text first; use the resulting generation ID for a complete `--id` decode.
+- Added complete mirrored copies of `World.cpp`, `ShaderBaseClasses.cpp`, `MaterialShader.h`, `MeshPassProcessor.h`, and `MeshPassProcessor.cpp`.
+- Local diff, Python syntax, decoder-format, and delimiter validation passed; this revision has not yet been compiled with the PS5 SDK/toolchain.
 
 ### 2026-09-22 — Persist correlated command-use records
 
