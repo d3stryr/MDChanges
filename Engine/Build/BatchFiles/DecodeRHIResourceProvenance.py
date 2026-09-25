@@ -64,6 +64,10 @@ OPERATION_NAMES = {
     27: "BindingRelease",
     28: "BindingOwner",
     29: "BindingInvalidate",
+    30: "CausalRequest",
+    31: "CausalExecute",
+    32: "CausalLink",
+    33: "CausalResource",
 }
 
 RESOURCE_TYPE_NAMES = {
@@ -272,6 +276,7 @@ def record_matches(
     resource_address: Optional[int],
     flags_address: Optional[int],
     text_contains: Optional[str],
+    causal_id: Optional[int],
 ) -> bool:
     if resource_id is not None and record.resource_id != resource_id:
         return False
@@ -281,6 +286,16 @@ def record_matches(
         return False
     if text_contains is not None and text_contains.casefold() not in record.text.casefold():
         return False
+    if causal_id is not None:
+        record_causal_id = (
+            record.caller_address
+            if record.operation == 32
+            else record.correlation_id
+            if record.operation in (30, 31, 33)
+            else 0
+        )
+        if record_causal_id != causal_id:
+            return False
     return True
 
 
@@ -290,6 +305,12 @@ def main() -> int:
     parser.add_argument("--id", type=parse_integer, dest="resource_id")
     parser.add_argument("--address", type=parse_integer, dest="resource_address")
     parser.add_argument("--flags", type=parse_integer, dest="flags_address")
+    parser.add_argument(
+        "--causal",
+        type=parse_integer,
+        dest="causal_id",
+        help="Emit the cross-thread MPC request/execute/resource chain for one causal id.",
+    )
     parser.add_argument(
         "--contains",
         dest="text_contains",
@@ -325,7 +346,8 @@ def main() -> int:
             print(
                 "seconds\tcycles\tkind\toperation\tid\tresource\tflags_address"
                 "\ttype\ttype_name\tthread\tpacked\tcaller\tcorrelation"
-                "\tbinding_id\towner_key\trecord_flags\ttext",
+                "\tbinding_id\tcausal_id\tparent_correlation"
+                "\towner_key\trecord_flags\ttext",
                 file=output_stream,
             )
 
@@ -337,6 +359,7 @@ def main() -> int:
                     args.resource_address,
                     args.flags_address,
                     args.text_contains,
+                    args.causal_id,
                 ):
                     continue
 
@@ -357,9 +380,17 @@ def main() -> int:
                     if 23 <= record.operation <= 29
                     else 0
                 )
+                causal_id = 0
+                parent_correlation = 0
+                if record.operation in (30, 31, 33):
+                    causal_id = record.correlation_id
+                elif record.operation == 32:
+                    causal_id = record.caller_address
+                    parent_correlation = record.caller_address
                 print(
                     "{:.9f}\t{}\t{}\t{}\t{}\t0x{:x}\t0x{:x}\t{}\t{}"
-                    "\t{}\t0x{:08x}\t0x{:x}\t{}\t{}\t0x{:x}\t0x{:04x}\t{}".format(
+                    "\t{}\t0x{:08x}\t0x{:x}\t{}\t{}\t{}\t{}"
+                    "\t0x{:x}\t0x{:04x}\t{}".format(
                         seconds,
                         record.cycles,
                         KIND_NAMES.get(record.kind, f"Unknown({record.kind})"),
@@ -379,6 +410,8 @@ def main() -> int:
                         record.caller_address,
                         record.correlation_id,
                         binding_id,
+                        causal_id,
+                        parent_correlation,
                         owner_key,
                         record.flags,
                         sanitize_tsv(record.text),
