@@ -624,6 +624,67 @@ FMeshDrawShaderBindings::~FMeshDrawShaderBindings()
 	Release();
 }
 
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+static std::atomic<uint64> GNextMeshDrawBindingProvenanceId { 1 };
+
+void FMeshDrawShaderBindings::RecordProvenanceLifecycle(
+	UE::RHI::ResourceProvenance::EOperation Operation,
+	uint64 CallerAddress) const
+{
+	if (ProvenanceBindingId == 0 || Size == 0)
+	{
+		return;
+	}
+
+	const uint8* ShaderBindingDataPtr = GetData();
+	for (int32 ShaderBindingsIndex = 0; ShaderBindingsIndex < ShaderLayouts.Num(); ++ShaderBindingsIndex)
+	{
+		FReadOnlyMeshDrawSingleShaderBindings SingleShaderBindings(
+			ShaderLayouts[ShaderBindingsIndex],
+			ShaderBindingDataPtr);
+		FRHIUniformBuffer* const* UniformBuffers = SingleShaderBindings.GetUniformBufferStart();
+		const uint64* OwnerKeys = SingleShaderBindings.GetProvenanceOwnerStart();
+		const uint64* ResourceIds = SingleShaderBindings.GetProvenanceResourceIdStart();
+		const int32 NumUniformBuffers = ShaderLayouts[ShaderBindingsIndex].ParameterMapInfo.UniformBuffers.Num();
+
+		for (int32 UniformBufferIndex = 0; UniformBufferIndex < NumUniformBuffers; ++UniformBufferIndex)
+		{
+			if (ResourceIds[UniformBufferIndex] != 0)
+			{
+				UE::RHI::ResourceProvenance::RecordBindingLifecycle(
+					Operation,
+					ResourceIds[UniformBufferIndex],
+					UniformBuffers[UniformBufferIndex],
+					ProvenanceBindingId,
+					OwnerKeys[UniformBufferIndex],
+					CallerAddress);
+			}
+		}
+
+		ShaderBindingDataPtr += ShaderLayouts[ShaderBindingsIndex].GetDataSizeBytes();
+	}
+}
+
+void FMeshDrawShaderBindings::MoveProvenanceFrom(FMeshDrawShaderBindings& Other)
+{
+	ProvenanceBindingId = Other.ProvenanceBindingId;
+	Other.ProvenanceBindingId = 0;
+	if (ProvenanceBindingId != 0)
+	{
+		RecordProvenanceLifecycle(
+			UE::RHI::ResourceProvenance::EOperation::BindingMove,
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
+	}
+}
+
+void FMeshDrawShaderBindings::RecordProvenanceInvalidation(uint64 CallerAddress) const
+{
+	RecordProvenanceLifecycle(
+		UE::RHI::ResourceProvenance::EOperation::BindingInvalidate,
+		CallerAddress);
+}
+#endif
+
 void FMeshDrawShaderBindings::Initialize(const FMeshProcessorShaders& Shaders)
 {
 	const int32 NumShaderFrequencies = 
@@ -738,6 +799,37 @@ void FMeshDrawShaderBindings::Initialize(const TShaderRef<FShader>& Shader)
 
 void FMeshDrawShaderBindings::Finalize(const FMeshProcessorShaders* ShadersForDebugging)
 {
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	if (ProvenanceBindingId == 0)
+	{
+		const uint8* ProvenanceDataPtr = GetData();
+		bool bContainsTrackedResource = false;
+		for (int32 ShaderBindingsIndex = 0;
+			ShaderBindingsIndex < ShaderLayouts.Num() && !bContainsTrackedResource;
+			++ShaderBindingsIndex)
+		{
+			FReadOnlyMeshDrawSingleShaderBindings SingleShaderBindings(
+				ShaderLayouts[ShaderBindingsIndex],
+				ProvenanceDataPtr);
+			const uint64* ResourceIds = SingleShaderBindings.GetProvenanceResourceIdStart();
+			const int32 NumUniformBuffers = ShaderLayouts[ShaderBindingsIndex].ParameterMapInfo.UniformBuffers.Num();
+			for (int32 UniformBufferIndex = 0; UniformBufferIndex < NumUniformBuffers; ++UniformBufferIndex)
+			{
+				bContainsTrackedResource |= ResourceIds[UniformBufferIndex] != 0;
+			}
+			ProvenanceDataPtr += ShaderLayouts[ShaderBindingsIndex].GetDataSizeBytes();
+		}
+
+		if (bContainsTrackedResource)
+		{
+			ProvenanceBindingId = GNextMeshDrawBindingProvenanceId.fetch_add(1, std::memory_order_relaxed);
+			RecordProvenanceLifecycle(
+				UE::RHI::ResourceProvenance::EOperation::BindingCreate,
+				UE::RHI::ResourceProvenance::CaptureCallerAddress());
+		}
+	}
+#endif
+
 #if VALIDATE_MESH_COMMAND_BINDINGS
 	if (!ShadersForDebugging)
 	{
@@ -866,10 +958,28 @@ void FMeshDrawShaderBindings::CopyFrom(const FMeshDrawShaderBindings& Other)
 	{
 		FPlatformMemory::Memcpy(GetData(), Other.GetData(), Size);
 	}
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	ProvenanceBindingId = Other.ProvenanceBindingId;
+	if (ProvenanceBindingId != 0)
+	{
+		RecordProvenanceLifecycle(
+			UE::RHI::ResourceProvenance::EOperation::BindingCopy,
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
+	}
+#endif
 }
 
 void FMeshDrawShaderBindings::Release()
 {
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	if (ProvenanceBindingId != 0)
+	{
+		RecordProvenanceLifecycle(
+			UE::RHI::ResourceProvenance::EOperation::BindingRelease,
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
+		ProvenanceBindingId = 0;
+	}
+#endif
 	if (Size > sizeof(FData))
 	{
 		delete[] Data.GetHeapData();
@@ -990,6 +1100,11 @@ void FMeshDrawCommand::SetDrawParametersAndFinalize(
 
 void FMeshDrawShaderBindings::SetOnCommandList(FRHICommandList& RHICmdList, const FBoundShaderStateInput& Shaders, FShaderBindingState* StateCacheShaderBindings) const
 {
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	RecordProvenanceLifecycle(
+		UE::RHI::ResourceProvenance::EOperation::BindingSubmit,
+		UE::RHI::ResourceProvenance::CaptureCallerAddress());
+#endif
 	const uint8* ShaderBindingDataPtr = GetData();
 	uint32 ShaderFrequencyBitIndex = ~0;
 	for (int32 ShaderBindingsIndex = 0; ShaderBindingsIndex < ShaderLayouts.Num(); ShaderBindingsIndex++)
@@ -1046,6 +1161,11 @@ void FMeshDrawShaderBindings::SetOnCommandList(FRHICommandList& RHICmdList, cons
 
 void FMeshDrawShaderBindings::SetParameters(FRHIBatchedShaderParameters& BatchedParameters, class FShaderBindingState* StateCacheShaderBindings) const
 {
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	RecordProvenanceLifecycle(
+		UE::RHI::ResourceProvenance::EOperation::BindingSubmit,
+		UE::RHI::ResourceProvenance::CaptureCallerAddress());
+#endif
 	check(ShaderLayouts.Num() == 1);
 	FReadOnlyMeshDrawSingleShaderBindings SingleShaderBindings(ShaderLayouts[0], GetData());
 
