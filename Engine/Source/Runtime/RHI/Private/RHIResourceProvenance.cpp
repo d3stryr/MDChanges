@@ -830,6 +830,13 @@ namespace
 		case EOperation::UpdateExecute:
 		case EOperation::BindingStore:
 		case EOperation::CommandOwner:
+		case EOperation::BindingCreate:
+		case EOperation::BindingCopy:
+		case EOperation::BindingMove:
+		case EOperation::BindingSubmit:
+		case EOperation::BindingRelease:
+		case EOperation::BindingOwner:
+		case EOperation::BindingInvalidate:
 			return true;
 		default:
 			return false;
@@ -848,6 +855,13 @@ namespace
 		case EOperation::UpdateExecute:
 		case EOperation::BindingStore:
 		case EOperation::CommandOwner:
+		case EOperation::BindingCreate:
+		case EOperation::BindingCopy:
+		case EOperation::BindingMove:
+		case EOperation::BindingSubmit:
+		case EOperation::BindingRelease:
+		case EOperation::BindingOwner:
+		case EOperation::BindingInvalidate:
 			return EJournalRecordKind::CommandUse;
 		default:
 			return EJournalRecordKind::Lifecycle;
@@ -924,6 +938,13 @@ namespace
 		case EOperation::AccessOwner:               return TEXT("AccessOwner");
 		case EOperation::ReleaseOwner:              return TEXT("ReleaseOwner");
 		case EOperation::CommandOwner:              return TEXT("CommandOwner");
+		case EOperation::BindingCreate:             return TEXT("BindingCreate");
+		case EOperation::BindingCopy:               return TEXT("BindingCopy");
+		case EOperation::BindingMove:               return TEXT("BindingMove");
+		case EOperation::BindingSubmit:             return TEXT("BindingSubmit");
+		case EOperation::BindingRelease:            return TEXT("BindingRelease");
+		case EOperation::BindingOwner:              return TEXT("BindingOwner");
+		case EOperation::BindingInvalidate:         return TEXT("BindingInvalidate");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -2500,6 +2521,60 @@ void RecordBindingStore(const void* ResourceAddress, uint64 CallerAddress)
 	if (FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId))
 	{
 		CapturePriorityOperationStack(*Identity, EOperation::BindingStore, 0, false);
+	}
+}
+
+void RecordBindingLifecycle(
+	EOperation Operation,
+	uint64 ResourceId,
+	const void* ResourceAddress,
+	uint64 BindingId,
+	uint64 OwnerKey,
+	uint64 CallerAddress)
+{
+	if (CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() == 0 ||
+		ResourceId == 0 || BindingId == 0)
+	{
+		return;
+	}
+
+	uint64 FlagsAddress = 0;
+	uint8 ResourceType = 0xff;
+	if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
+	{
+		// The retained identity is independent storage. ResourceAddress is only compared
+		// as an integer token; the potentially freed object is never dereferenced here.
+		if (Identity->ResourceAddress.load(std::memory_order_acquire) == reinterpret_cast<uint64>(ResourceAddress))
+		{
+			FlagsAddress = Identity->FlagsAddress.load(std::memory_order_relaxed);
+			ResourceType = static_cast<uint8>(Identity->ResourceType.load(std::memory_order_relaxed));
+		}
+	}
+
+	Record(
+		Operation,
+		ResourceAddress,
+		reinterpret_cast<const void*>(FlagsAddress),
+		ResourceId,
+		ResourceType,
+		0,
+		CallerAddress,
+		BindingId);
+
+	// Keep the operation-site PC intact on the lifecycle record. A separate row
+	// links the binding lineage to its bounded owner label using the owner key.
+	if (OwnerKey != 0 &&
+		(Operation == EOperation::BindingCreate || Operation == EOperation::BindingSubmit))
+	{
+		Record(
+			EOperation::BindingOwner,
+			ResourceAddress,
+			reinterpret_cast<const void*>(FlagsAddress),
+			ResourceId,
+			ResourceType,
+			0,
+			OwnerKey,
+			BindingId);
 	}
 }
 
