@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [72819cc0125fca91ceb9cea9b459a57e2f342f90](https://github.com/d3stryr/UnrealEngine/commit/72819cc0125fca91ceb9cea9b459a57e2f342f90)
+- Source commit: [414ce447548ce54d55431a443f8fb4f375078346](https://github.com/d3stryr/UnrealEngine/commit/414ce447548ce54d55431a443f8fb4f375078346)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -18,7 +18,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
 | `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `43a642c574f27828fa250255de5314221b7c058d` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, owner tokens, command correlation, cached-binding lineage, and causal-chain API. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `d585077ccbc7171704a0da1ad235b21c456b14b9` | Added | Bounded recorder, retained identities, journal, access/release owners, generation-safe bindings, and parent/child causal correlation. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `a81f5e1a6a07526e4073f71730a60cdf35a1f8a4` | Added | Bounded recorder, retained identities, journal, access/release owners, deduplicated generation-safe bindings, and parent/child causal correlation. |
 | `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `2a818afce7a330bfeb67a26314cd2d362e1acac2` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, name/owner capture, and copied release-owner markers. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
@@ -112,6 +112,7 @@ A `PhysicalFree` event means the C++ delete expression completed. Memory Insight
 - 16,384 preallocated journal queue records
 - up to 64 deduplicated access-owner identities per retained priority generation; the four most recent labels are retained for crash-time output and accepted labels are journaled
 - 8,192 copied access-owner labels and 32,768 command-owner correlation links; both are fixed-capacity and report eviction/overwrite/miss coverage
+- 65,536 fixed binding-submit dedup slots; normal submissions persist once per binding/resource pair, collisions are counted, and submissions observed after a stale lifecycle state are never suppressed
 - 16 staged owner tokens per producer thread; overflow is counted, and cached mesh binding data carries two diagnostic `uint64` values per uniform-buffer slot (owner key and exact resource generation ID)
 - four recent release-owner labels per retained priority generation
 - 256 KiB background write buffer
@@ -147,6 +148,7 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - Added a process-unique binding lineage ID only to binding sets containing an MPC generation already promoted into retained provenance storage.
 - Copied the exact RHI generation ID beside the raw uniform-buffer pointer and owner key. No extra owning RHI reference is added, and lifecycle reporting never dereferences the resource pointer.
 - Added journal operations for binding creation, copy, move, submission, explicit cache invalidation, release, and binding-to-owner association. The decoder emits a dedicated `binding_id` column.
+- Bound normal submission volume with a fixed 65,536-slot lock-free dedup table. The first submit for a binding/resource pair is journaled; repeats are counted but suppressed. Once the retained resource state is stale, submissions are always journaled. First/stale/deduplicated/collision totals are printed in failure coverage.
 - Instrumented `FPrimitiveSceneInfo::RemoveCachedMeshDrawCommands` at the actual state-bucket and sparse draw-list removal points. A shared state-bucket binding is invalidated only when its reference count reaches zero and the cached command is actually erased.
 - Extended cached MPC access-owner text with render-side primitive owner, primitive resource, and level names. In a World Partition build, the level name helps identify the runtime-cell context without touching a UObject on the render thread.
 - Explicit Data Layer membership is not guessed from level names. It will be copied at a synchronized higher-level association point in the bounded actor/component contributor feature.
