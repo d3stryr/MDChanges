@@ -76,7 +76,14 @@ namespace UE::RHI::ResourceProvenance
 		DataLayerTargetStateChanged,
 		DataLayerEffectiveStateChanged,
 		DataLayerStateNoOp,
-		DataLayerTransitionCoverage
+		DataLayerTransitionCoverage,
+		CellStateRequest,
+		CellStateAccepted,
+		CellStateBlocked,
+		CellStateProgress,
+		CellStateCompleted,
+		CellTransitionSuperseded,
+		CellTransitionCoverage
 	};
 
 	enum class EReleaseCause : uint8
@@ -201,6 +208,21 @@ namespace UE::RHI::ResourceProvenance
 	 * SubjectAddress is an opaque UDataLayerInstance identity and is never dereferenced.
 	 */
 	RHI_API void RecordDataLayerTransition(
+		EOperation Operation,
+		uint64 TransitionId,
+		const void* SubjectAddress,
+		uint32 PackedValue,
+		const TCHAR* Text,
+		uint64 CallerAddress);
+
+	/** Allocates one bounded World Partition runtime-cell transition id. */
+	RHI_API uint64 AllocateCellTransitionId();
+
+	/**
+	 * Records one request, acceptance, block, progress, completion, or supersession row
+	 * for a runtime-cell transition. SubjectAddress is an opaque runtime-cell identity.
+	 */
+	RHI_API void RecordCellTransition(
 		EOperation Operation,
 		uint64 TransitionId,
 		const void* SubjectAddress,

@@ -925,6 +925,7 @@ namespace
 	std::atomic<uint64> GNextCausalId { 1 };
 	std::atomic<uint64> GNextContributorId { 1 };
 	std::atomic<uint64> GNextDataLayerTransitionId { 1 };
+	std::atomic<uint64> GNextCellTransitionId { 1 };
 	std::atomic<uint64> GNextDestroyedIdentity { 0 };
 	std::atomic<uint64> GThreadBufferOverflows { 0 };
 	std::atomic<uint64> GActiveIdentityOverflows { 0 };
@@ -955,8 +956,12 @@ namespace
 	std::atomic<uint64> GDataLayerTransitionsRecorded { 0 };
 	std::atomic<uint64> GDataLayerTransitionRowsRecorded { 0 };
 	std::atomic<uint64> GDataLayerTransitionsOmitted { 0 };
+	std::atomic<uint64> GCellTransitionsRecorded { 0 };
+	std::atomic<uint64> GCellTransitionRowsRecorded { 0 };
+	std::atomic<uint64> GCellTransitionsOmitted { 0 };
 	std::atomic<uint32> GContributorDescriptorCoverageReported { 0 };
 	std::atomic<uint32> GDataLayerTransitionCoverageReported { 0 };
+	std::atomic<uint32> GCellTransitionCoverageReported { 0 };
 
 	thread_local int32 GTlsThreadBufferIndex = -2;
 	thread_local uint32 GTlsCommandSequence = 0;
@@ -997,6 +1002,12 @@ namespace
 		TEXT("r.RHI.ResourceProvenance.MaxDataLayerTransitions"),
 		65536,
 		TEXT("Maximum number of World Partition Data Layer transitions recorded during one process run."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxCellTransitions(
+		TEXT("r.RHI.ResourceProvenance.MaxCellTransitions"),
+		65536,
+		TEXT("Maximum number of World Partition runtime-cell transitions recorded during one process run."),
 		ECVF_Default);
 
 	const TCHAR* GetOperationName(EOperation Operation)
@@ -1062,6 +1073,13 @@ namespace
 		case EOperation::DataLayerEffectiveStateChanged: return TEXT("DataLayerEffectiveStateChanged");
 		case EOperation::DataLayerStateNoOp:          return TEXT("DataLayerStateNoOp");
 		case EOperation::DataLayerTransitionCoverage: return TEXT("DataLayerTransitionCoverage");
+		case EOperation::CellStateRequest:           return TEXT("CellStateRequest");
+		case EOperation::CellStateAccepted:          return TEXT("CellStateAccepted");
+		case EOperation::CellStateBlocked:           return TEXT("CellStateBlocked");
+		case EOperation::CellStateProgress:          return TEXT("CellStateProgress");
+		case EOperation::CellStateCompleted:         return TEXT("CellStateCompleted");
+		case EOperation::CellTransitionSuperseded:   return TEXT("CellTransitionSuperseded");
+		case EOperation::CellTransitionCoverage:     return TEXT("CellTransitionCoverage");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -1974,7 +1992,7 @@ namespace
 		}
 
 		UE_LOG(LogRHI, Error,
-			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu contributor_descriptors=%llu contributor_descriptor_omissions=%llu contributor_without_actor=%llu contributor_without_runtime_cell=%llu contributor_datalayer_rows=%llu contributor_datalayer_omissions=%llu binding_contributor_links=%llu datalayer_transitions=%llu datalayer_transition_rows=%llu datalayer_transition_omissions=%llu"),
+			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu contributor_descriptors=%llu contributor_descriptor_omissions=%llu contributor_without_actor=%llu contributor_without_runtime_cell=%llu contributor_datalayer_rows=%llu contributor_datalayer_omissions=%llu binding_contributor_links=%llu datalayer_transitions=%llu datalayer_transition_rows=%llu datalayer_transition_omissions=%llu cell_transitions=%llu cell_transition_rows=%llu cell_transition_omissions=%llu"),
 			MatchCount,
 			AddressGenerationCount,
 			PriorityIdentityCapacity,
@@ -2002,7 +2020,10 @@ namespace
 			static_cast<unsigned long long>(GBindingContributorLinksRecorded.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GDataLayerTransitionsRecorded.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GDataLayerTransitionRowsRecorded.load(std::memory_order_relaxed)),
-			static_cast<unsigned long long>(GDataLayerTransitionsOmitted.load(std::memory_order_relaxed)));
+			static_cast<unsigned long long>(GDataLayerTransitionsOmitted.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GCellTransitionsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GCellTransitionRowsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GCellTransitionsOmitted.load(std::memory_order_relaxed)));
 
 		if (AddressGenerationCount > 1)
 		{
@@ -2734,6 +2755,104 @@ void RecordDataLayerTransition(
 	}
 
 	GDataLayerTransitionRowsRecorded.fetch_add(1, std::memory_order_relaxed);
+	Record(
+		Operation,
+		SubjectAddress,
+		nullptr,
+		0,
+		0xff,
+		PackedValue,
+		CallerAddress,
+		TransitionId);
+
+	FJournalQueueRecord JournalRecord = MakeJournalRecord(
+		EJournalRecordKind::Marker,
+		Operation,
+		SubjectAddress,
+		nullptr,
+		0,
+		0xff,
+		PackedValue,
+		CallerAddress,
+		TransitionId);
+	CopyJournalText(JournalRecord, Text);
+	GJournalWriter.Enqueue(JournalRecord);
+}
+
+uint64 AllocateCellTransitionId()
+{
+	if (!IsContributorCaptureEnabled())
+	{
+		return 0;
+	}
+
+	const uint64 TransitionId = GNextCellTransitionId.fetch_add(1, std::memory_order_relaxed);
+	const uint64 MaximumTransitions = static_cast<uint64>(FMath::Clamp(
+		CVarRHIResourceProvenanceMaxCellTransitions.GetValueOnAnyThread(),
+		1,
+		1048576));
+	if (TransitionId > MaximumTransitions)
+	{
+		GCellTransitionsOmitted.fetch_add(1, std::memory_order_relaxed);
+		if (GCellTransitionCoverageReported.exchange(1, std::memory_order_acq_rel) == 0)
+		{
+			const uint32 PackedCoverage = (1u << 31) | 1u;
+			Record(
+				EOperation::CellTransitionCoverage,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			FJournalQueueRecord JournalRecord = MakeJournalRecord(
+				EJournalRecordKind::Marker,
+				EOperation::CellTransitionCoverage,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			CopyJournalText(JournalRecord, TEXT("reason=max_cell_transitions first_omission=1"));
+			GJournalWriter.Enqueue(JournalRecord);
+		}
+		return 0;
+	}
+
+	GCellTransitionsRecorded.fetch_add(1, std::memory_order_relaxed);
+	return TransitionId;
+}
+
+void RecordCellTransition(
+	EOperation Operation,
+	uint64 TransitionId,
+	const void* SubjectAddress,
+	uint32 PackedValue,
+	const TCHAR* Text,
+	uint64 CallerAddress)
+{
+	if (TransitionId == 0 || !IsContributorCaptureEnabled())
+	{
+		return;
+	}
+
+	switch (Operation)
+	{
+	case EOperation::CellStateRequest:
+	case EOperation::CellStateAccepted:
+	case EOperation::CellStateBlocked:
+	case EOperation::CellStateProgress:
+	case EOperation::CellStateCompleted:
+	case EOperation::CellTransitionSuperseded:
+		break;
+	default:
+		return;
+	}
+
+	GCellTransitionRowsRecorded.fetch_add(1, std::memory_order_relaxed);
 	Record(
 		Operation,
 		SubjectAddress,

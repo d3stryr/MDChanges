@@ -93,6 +93,13 @@ OPERATION_NAMES = {
     56: "DataLayerEffectiveStateChanged",
     57: "DataLayerStateNoOp",
     58: "DataLayerTransitionCoverage",
+    59: "CellStateRequest",
+    60: "CellStateAccepted",
+    61: "CellStateBlocked",
+    62: "CellStateProgress",
+    63: "CellStateCompleted",
+    64: "CellTransitionSuperseded",
+    65: "CellTransitionCoverage",
 }
 
 DATA_LAYER_STATE_NAMES = {
@@ -106,6 +113,37 @@ DATA_LAYER_REJECTION_NAMES = {
     1: "ClientOnlyFromServer",
     2: "ServerOnlyFromClient",
     3: "AuthoritativeFromClient",
+}
+
+CELL_ACTION_NAMES = {
+    0: "Unknown",
+    1: "Load",
+    2: "Activate",
+    3: "Deactivate",
+    4: "Unload",
+    5: "Show",
+    6: "Hide",
+    7: "StreamingLevel",
+}
+
+CELL_BLOCK_REASON_NAMES = {
+    0: "None",
+    1: "StreamingDisabled",
+    2: "BudgetExhausted",
+    3: "CannotUnload",
+    4: "FailedToLoad",
+}
+
+LEVEL_STREAMING_STATE_NAMES = {
+    0: "Removed",
+    1: "Unloaded",
+    2: "FailedToLoad",
+    3: "Loading",
+    4: "LoadedNotVisible",
+    5: "MakingVisible",
+    6: "LoadedVisible",
+    7: "MakingInvisible",
+    255: "NotApplicable",
 }
 
 RELEASE_CAUSE_NAMES = {
@@ -433,6 +471,35 @@ def decode_packed_detail(record: Record) -> str:
             "omitted_data_layer_transitions="
             f"{record.packed_value & 0x7fffffff}"
         )
+    if 59 <= record.operation <= 64:
+        prior = record.packed_value & 0x3
+        target = (record.packed_value >> 2) & 0x3
+        observed = (record.packed_value >> 4) & 0x3
+        action = (record.packed_value >> 6) & 0x7
+        level_state = (record.packed_value >> 16) & 0xff
+        block_reason = (record.packed_value >> 24) & 0xf
+        flags = []
+        if record.packed_value & (1 << 9):
+            flags.append("always_loaded")
+        if record.packed_value & (1 << 10):
+            flags.append("spatially_loaded")
+        if record.packed_value & (1 << 11):
+            flags.append("has_data_layers")
+        flag_text = ",".join(flags) if flags else "none"
+        return (
+            f"cell={DATA_LAYER_STATE_NAMES.get(prior, f'Unknown({prior})')}"
+            f"->{DATA_LAYER_STATE_NAMES.get(target, f'Unknown({target})')},"
+            f"observed={DATA_LAYER_STATE_NAMES.get(observed, f'Unknown({observed})')},"
+            f"action={CELL_ACTION_NAMES.get(action, f'Unknown({action})')},"
+            f"cell_flags={flag_text},"
+            f"level_state={LEVEL_STREAMING_STATE_NAMES.get(level_state, f'Unknown({level_state})')},"
+            f"blocked={CELL_BLOCK_REASON_NAMES.get(block_reason, f'Unknown({block_reason})')}"
+        )
+    if record.operation == 65:
+        return (
+            "omitted_cell_transitions="
+            f"{record.packed_value & 0x7fffffff}"
+        )
     return ""
 
 
@@ -447,6 +514,7 @@ def record_matches(
     binding_id: Optional[int],
     contributor_id: Optional[int],
     data_layer_transition_id: Optional[int],
+    cell_transition_id: Optional[int],
 ) -> bool:
     if resource_id is not None and record.resource_id != resource_id:
         return False
@@ -497,6 +565,12 @@ def record_matches(
         )
         if record_transition_id != data_layer_transition_id:
             return False
+    if cell_transition_id is not None:
+        record_transition_id = (
+            record.correlation_id if 59 <= record.operation <= 64 else 0
+        )
+        if record_transition_id != cell_transition_id:
+            return False
     return True
 
 
@@ -542,6 +616,12 @@ def main() -> int:
         dest="data_layer_transition_id",
         help="Emit request, outcome, and effective-state rows for one Data Layer transition id.",
     )
+    parser.add_argument(
+        "--cell-transition",
+        type=parse_integer,
+        dest="cell_transition_id",
+        help="Emit request, progress, completion, and supersession rows for one runtime-cell transition id.",
+    )
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
 
@@ -573,7 +653,7 @@ def main() -> int:
                 "\ttype\ttype_name\tthread\tpacked\tcaller\tcorrelation"
                 "\tbinding_id\tcausal_id\tparent_correlation"
                 "\tscene_refresh_id\tcontributor_id\tdata_layer_transition_id"
-                "\towner_key\trecord_flags\tdetail\ttext",
+                "\tcell_transition_id\towner_key\trecord_flags\tdetail\ttext",
                 file=output_stream,
             )
 
@@ -590,6 +670,7 @@ def main() -> int:
                     args.binding_id,
                     args.contributor_id,
                     args.data_layer_transition_id,
+                    args.cell_transition_id,
                 ):
                     continue
 
@@ -621,6 +702,11 @@ def main() -> int:
                 data_layer_transition_id = (
                     record.correlation_id
                     if 53 <= record.operation <= 57
+                    else 0
+                )
+                cell_transition_id = (
+                    record.correlation_id
+                    if 59 <= record.operation <= 64
                     else 0
                 )
                 causal_id = 0
@@ -660,6 +746,7 @@ def main() -> int:
                     str(scene_refresh_id),
                     str(contributor_id),
                     str(data_layer_transition_id),
+                    str(cell_transition_id),
                     f"0x{owner_key:x}",
                     f"0x{record.flags:04x}",
                     decode_packed_detail(record),
