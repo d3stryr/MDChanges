@@ -140,7 +140,7 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - For a recreated buffer, emit `CausalResource` after owner paths promote the new RHI generation. This directly links the new generation ID to the original MPC request.
 - Add TSV columns `causal_id` and `parent_correlation`, plus `--causal <id>` filtering to recover request/execute/resource rows that intentionally have no RHI resource ID on the game-thread side.
 - Causal records are fixed-size journal events; there are no per-update strings, allocations, stack walks, or file writes on gameplay/render threads.
-- Python syntax, whitespace, preprocessor-balance, and source checks passed. This revision has not been compiled with the PS5 SDK/toolchain.
+- Python syntax, whitespace, preprocessor-balance, source checks, and a synthetic `CausalRequest`/`CausalLink` journal decode passed. This revision has not been compiled with the PS5 SDK/toolchain.
 
 ### 2026-09-25 — Feature 1: cached draw-command binding lifetime audit
 
