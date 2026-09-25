@@ -40,7 +40,14 @@ namespace UE::RHI::ResourceProvenance
 		InvalidUse,
 		AccessOwner,
 		ReleaseOwner,
-		CommandOwner
+		CommandOwner,
+		BindingCreate,
+		BindingCopy,
+		BindingMove,
+		BindingSubmit,
+		BindingRelease,
+		BindingOwner,
+		BindingInvalidate
 	};
 
 	FORCEINLINE uint64 CaptureCallerAddress()
@@ -100,6 +107,18 @@ namespace UE::RHI::ResourceProvenance
 	RHI_API uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CallerAddress);
 	RHI_API void RecordCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CorrelationId, uint64 CallerAddress);
 	RHI_API void RecordBindingStore(const void* ResourceAddress, uint64 CallerAddress);
+
+	/**
+	 * Records the lifetime of a cached binding using its saved resource generation.
+	 * This never dereferences ResourceAddress and remains valid after physical free.
+	 */
+	RHI_API void RecordBindingLifecycle(
+		EOperation Operation,
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		uint64 BindingId,
+		uint64 OwnerKey,
+		uint64 CallerAddress);
 
 	/**
 	 * Registers one bounded access owner. Formatting is only needed when
