@@ -43,6 +43,7 @@ namespace
 	static constexpr uint32 PriorityAccessOwnerCount = 4;
 	static constexpr uint32 PriorityReleaseOwnerCount = 4;
 	static constexpr uint32 PriorityBindingStateCapacity = 16;
+	static constexpr uint32 ReferenceCensusCapacity = 32;
 	static constexpr uint32 AccessOwnerKeyCapacity = 64;
 	static constexpr uint32 StagedAccessOwnerCapacity = 16;
 	static constexpr uint32 OwnerLabelCapacity = 8192;
@@ -193,6 +194,15 @@ namespace
 		bool bSubmitted = false;
 	};
 
+	struct FReferenceCallsiteCensus
+	{
+		uint64 CallerAddress = 0;
+		uint64 LastCycles = 0;
+		uint32 AddRefCount = 0;
+		uint32 ReleaseCount = 0;
+		uint32 FinalReleaseCount = 0;
+	};
+
 	struct FPriorityIdentity
 	{
 		mutable std::atomic_flag Writer = ATOMIC_FLAG_INIT;
@@ -218,6 +228,9 @@ namespace
 		TAtomicString<PathCapacity> ReleaseOwners[PriorityReleaseOwnerCount];
 		uint32 BindingStateOmitted = 0;
 		FPriorityBindingState BindingStates[PriorityBindingStateCapacity];
+		uint32 ReferenceCensusOmitted = 0;
+		bool bReferenceCensusJournaled = false;
+		FReferenceCallsiteCensus ReferenceCensus[ReferenceCensusCapacity];
 		uint64 LastCommandOwnerKey = 0;
 		uint64 LastCommandOwnerCorrelation = 0;
 		TAtomicString<JournalTextCapacity> LastCommandOwner;
@@ -869,6 +882,8 @@ namespace
 		case EOperation::ReleaseBindingSnapshot:
 		case EOperation::ReleaseBindingCoverage:
 		case EOperation::BindingContributor:
+		case EOperation::ReferenceCensus:
+		case EOperation::ReferenceCensusCoverage:
 			return true;
 		default:
 			return false;
@@ -963,6 +978,9 @@ namespace
 	std::atomic<uint64> GPrimitiveTeardownsRecorded { 0 };
 	std::atomic<uint64> GPrimitiveTeardownRowsRecorded { 0 };
 	std::atomic<uint64> GPrimitiveTeardownsOmitted { 0 };
+	std::atomic<uint64> GReferenceCensusCallsitesRecorded { 0 };
+	std::atomic<uint64> GReferenceCensusRowsJournaled { 0 };
+	std::atomic<uint64> GReferenceCensusOperationsOmitted { 0 };
 	std::atomic<uint32> GContributorDescriptorCoverageReported { 0 };
 	std::atomic<uint32> GDataLayerTransitionCoverageReported { 0 };
 	std::atomic<uint32> GCellTransitionCoverageReported { 0 };
@@ -1097,6 +1115,15 @@ namespace
 		case EOperation::PrimitiveTeardownBinding:   return TEXT("PrimitiveTeardownBinding");
 		case EOperation::PrimitiveTeardownEnd:       return TEXT("PrimitiveTeardownEnd");
 		case EOperation::PrimitiveTeardownCoverage:  return TEXT("PrimitiveTeardownCoverage");
+		case EOperation::MPCAssetPostLoad:           return TEXT("MPCAssetPostLoad");
+		case EOperation::MPCAssetBeginDestroy:       return TEXT("MPCAssetBeginDestroy");
+		case EOperation::MPCAssetFinishDestroy:      return TEXT("MPCAssetFinishDestroy");
+		case EOperation::MPCGCReferenceChain:        return TEXT("MPCGCReferenceChain");
+		case EOperation::ReferenceCensus:            return TEXT("ReferenceCensus");
+		case EOperation::ReferenceCensusCoverage:    return TEXT("ReferenceCensusCoverage");
+		case EOperation::MPCAssetManagerLoadRequest:return TEXT("MPCAssetManagerLoadRequest");
+		case EOperation::MPCAssetManagerLoadComplete:return TEXT("MPCAssetManagerLoadComplete");
+		case EOperation::MPCAssetManagerUnload:      return TEXT("MPCAssetManagerUnload");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -1506,6 +1533,12 @@ namespace
 		{
 			BindingState = {};
 		}
+		ClaimedIdentity->ReferenceCensusOmitted = 0;
+		ClaimedIdentity->bReferenceCensusJournaled = false;
+		for (FReferenceCallsiteCensus& Census : ClaimedIdentity->ReferenceCensus)
+		{
+			Census = {};
+		}
 		ClaimedIdentity->LastCommandOwnerKey = 0;
 		ClaimedIdentity->LastCommandOwnerCorrelation = 0;
 		ClaimedIdentity->LastCommandOwner.Set(nullptr);
@@ -1594,6 +1627,147 @@ namespace
 		}
 	}
 
+	void RecordReferenceCensusOperation(
+		uint64 ResourceId,
+		EOperation Operation,
+		uint64 CallerAddress)
+	{
+		if (ResourceId == 0 ||
+			(Operation != EOperation::AddRef && Operation != EOperation::Release && Operation != EOperation::FinalRelease))
+		{
+			return;
+		}
+
+		FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId);
+		if (!Identity)
+		{
+			return;
+		}
+
+		bool bRecordedNewCallsite = false;
+		bool bOmitted = false;
+		LockPriorityIdentity(*Identity);
+		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId && !Identity->bReferenceCensusJournaled)
+		{
+			FReferenceCallsiteCensus* Destination = nullptr;
+			for (FReferenceCallsiteCensus& Census : Identity->ReferenceCensus)
+			{
+				if (Census.CallerAddress == CallerAddress)
+				{
+					Destination = &Census;
+					break;
+				}
+				if (!Destination && Census.CallerAddress == 0)
+				{
+					Destination = &Census;
+				}
+			}
+
+			if (Destination && Destination->CallerAddress == 0)
+			{
+				Destination->CallerAddress = CallerAddress;
+				bRecordedNewCallsite = true;
+			}
+			if (Destination)
+			{
+				Destination->LastCycles = FPlatformTime::Cycles64();
+				if (Operation == EOperation::AddRef)
+				{
+					++Destination->AddRefCount;
+				}
+				else if (Operation == EOperation::Release)
+				{
+					++Destination->ReleaseCount;
+				}
+				else
+				{
+					++Destination->FinalReleaseCount;
+				}
+			}
+			else
+			{
+				++Identity->ReferenceCensusOmitted;
+				bOmitted = true;
+			}
+		}
+		UnlockPriorityIdentity(*Identity);
+
+		if (bRecordedNewCallsite)
+		{
+			GReferenceCensusCallsitesRecorded.fetch_add(1, std::memory_order_relaxed);
+		}
+		if (bOmitted)
+		{
+			GReferenceCensusOperationsOmitted.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+
+	void JournalReferenceCensus(FPriorityIdentity& Identity)
+	{
+		FReferenceCallsiteCensus Snapshot[ReferenceCensusCapacity];
+		uint32 Omitted = 0;
+		uint64 ResourceId = 0;
+		uint64 ResourceAddress = 0;
+		uint64 FlagsAddress = 0;
+		uint8 ResourceType = 0xff;
+
+		LockPriorityIdentity(Identity);
+		if (Identity.bReferenceCensusJournaled)
+		{
+			UnlockPriorityIdentity(Identity);
+			return;
+		}
+		Identity.bReferenceCensusJournaled = true;
+		ResourceId = Identity.ResourceId.load(std::memory_order_relaxed);
+		ResourceAddress = Identity.ResourceAddress.load(std::memory_order_relaxed);
+		FlagsAddress = Identity.FlagsAddress.load(std::memory_order_relaxed);
+		ResourceType = static_cast<uint8>(Identity.ResourceType.load(std::memory_order_relaxed));
+		Omitted = Identity.ReferenceCensusOmitted;
+		for (uint32 Index = 0; Index < ReferenceCensusCapacity; ++Index)
+		{
+			Snapshot[Index] = Identity.ReferenceCensus[Index];
+		}
+		UnlockPriorityIdentity(Identity);
+
+		for (const FReferenceCallsiteCensus& Census : Snapshot)
+		{
+			if (Census.CallerAddress == 0)
+			{
+				continue;
+			}
+			const uint32 PackedValue =
+				FMath::Min(Census.AddRefCount, 4095u) |
+				(FMath::Min(Census.ReleaseCount, 4095u) << 12) |
+				(FMath::Min(Census.FinalReleaseCount, 15u) << 24) |
+				(Census.AddRefCount > 4095u ? 1u << 28 : 0u) |
+				(Census.ReleaseCount > 4095u ? 1u << 29 : 0u) |
+				(Census.FinalReleaseCount > 15u ? 1u << 30 : 0u);
+			Record(
+				EOperation::ReferenceCensus,
+				reinterpret_cast<const void*>(ResourceAddress),
+				reinterpret_cast<const void*>(FlagsAddress),
+				ResourceId,
+				ResourceType,
+				PackedValue,
+				Census.CallerAddress,
+				Census.LastCycles);
+			GReferenceCensusRowsJournaled.fetch_add(1, std::memory_order_relaxed);
+		}
+
+		if (Omitted != 0)
+		{
+			Record(
+				EOperation::ReferenceCensusCoverage,
+				reinterpret_cast<const void*>(ResourceAddress),
+				reinterpret_cast<const void*>(FlagsAddress),
+				ResourceId,
+				ResourceType,
+				Omitted,
+				CaptureCallerAddress(),
+				0);
+		}
+	}
+
 	void UpdatePriorityLifecycle(uint64 ResourceId, EOperation Operation)
 	{
 		if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
@@ -1602,6 +1776,10 @@ namespace
 			if (Operation == EOperation::FinalRelease || Operation == EOperation::PhysicalFree)
 			{
 				CapturePriorityOperationStack(*Identity, Operation, 0, false);
+			}
+			if (Operation == EOperation::FinalRelease)
+			{
+				JournalReferenceCensus(*Identity);
 			}
 		}
 	}
@@ -2009,7 +2187,7 @@ namespace
 		}
 
 		UE_LOG(LogRHI, Error,
-			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu contributor_descriptors=%llu contributor_descriptor_omissions=%llu contributor_without_actor=%llu contributor_without_runtime_cell=%llu contributor_datalayer_rows=%llu contributor_datalayer_omissions=%llu binding_contributor_links=%llu datalayer_transitions=%llu datalayer_transition_rows=%llu datalayer_transition_omissions=%llu cell_transitions=%llu cell_transition_rows=%llu cell_transition_omissions=%llu primitive_teardowns=%llu primitive_teardown_rows=%llu primitive_teardown_omissions=%llu"),
+			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu contributor_descriptors=%llu contributor_descriptor_omissions=%llu contributor_without_actor=%llu contributor_without_runtime_cell=%llu contributor_datalayer_rows=%llu contributor_datalayer_omissions=%llu binding_contributor_links=%llu datalayer_transitions=%llu datalayer_transition_rows=%llu datalayer_transition_omissions=%llu cell_transitions=%llu cell_transition_rows=%llu cell_transition_omissions=%llu primitive_teardowns=%llu primitive_teardown_rows=%llu primitive_teardown_omissions=%llu reference_census_callsites=%llu reference_census_rows=%llu reference_census_omitted_operations=%llu"),
 			MatchCount,
 			AddressGenerationCount,
 			PriorityIdentityCapacity,
@@ -2043,7 +2221,10 @@ namespace
 			static_cast<unsigned long long>(GCellTransitionsOmitted.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GPrimitiveTeardownsRecorded.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GPrimitiveTeardownRowsRecorded.load(std::memory_order_relaxed)),
-			static_cast<unsigned long long>(GPrimitiveTeardownsOmitted.load(std::memory_order_relaxed)));
+			static_cast<unsigned long long>(GPrimitiveTeardownsOmitted.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GReferenceCensusCallsitesRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GReferenceCensusRowsJournaled.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GReferenceCensusOperationsOmitted.load(std::memory_order_relaxed)));
 
 		if (AddressGenerationCount > 1)
 		{
@@ -2473,6 +2654,55 @@ void RecordMarker(
 	Record(Operation, ResourceAddress, FlagsAddress, ResourceId, ResourceType, 0, JournalRecord.CallerAddress);
 }
 
+void RecordResourceTextEvent(
+	EOperation Operation,
+	uint64 ResourceId,
+	const void* ResourceAddress,
+	const void* FlagsAddress,
+	uint8 ResourceType,
+	uint32 PackedValue,
+	const TCHAR* Text,
+	uint64 CallerAddress,
+	uint64 CorrelationId)
+{
+	switch (Operation)
+	{
+	case EOperation::MPCAssetPostLoad:
+	case EOperation::MPCAssetBeginDestroy:
+	case EOperation::MPCAssetFinishDestroy:
+	case EOperation::MPCGCReferenceChain:
+	case EOperation::MPCAssetManagerLoadRequest:
+	case EOperation::MPCAssetManagerLoadComplete:
+	case EOperation::MPCAssetManagerUnload:
+		break;
+	default:
+		return;
+	}
+
+	Record(
+		Operation,
+		ResourceAddress,
+		FlagsAddress,
+		ResourceId,
+		ResourceType,
+		PackedValue,
+		CallerAddress,
+		CorrelationId);
+
+	FJournalQueueRecord JournalRecord = MakeJournalRecord(
+		EJournalRecordKind::Marker,
+		Operation,
+		ResourceAddress,
+		FlagsAddress,
+		ResourceId,
+		ResourceType,
+		PackedValue,
+		CallerAddress,
+		CorrelationId);
+	CopyJournalText(JournalRecord, Text);
+	GJournalWriter.Enqueue(JournalRecord);
+}
+
 void Record(
 	EOperation Operation,
 	const void* ResourceAddress,
@@ -2506,6 +2736,8 @@ void Record(
 
 		Event.Writer.clear(std::memory_order_release);
 	}
+
+	RecordReferenceCensusOperation(ResourceId, Operation, CallerAddress);
 
 	switch (Operation)
 	{

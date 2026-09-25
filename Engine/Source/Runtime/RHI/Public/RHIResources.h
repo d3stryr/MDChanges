@@ -216,6 +216,25 @@ public:
 			CallerAddress,
 			CorrelationId);
 	}
+
+	inline void RecordProvenanceTextEvent(
+		UE::RHI::ResourceProvenance::EOperation Operation,
+		uint32 PackedValue,
+		const TCHAR* Text,
+		uint64 CallerAddress,
+		uint64 CorrelationId = 0) const
+	{
+		UE::RHI::ResourceProvenance::RecordResourceTextEvent(
+			Operation,
+			ProvenanceId,
+			this,
+			&AtomicFlags,
+			static_cast<uint8>(ResourceType),
+			PackedValue,
+			Text,
+			CallerAddress,
+			CorrelationId);
+	}
 #endif
 
 #if RHI_ENABLE_RESOURCE_INFO

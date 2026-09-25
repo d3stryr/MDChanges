@@ -88,7 +88,16 @@ namespace UE::RHI::ResourceProvenance
 		PrimitiveTeardownCacheRemove,
 		PrimitiveTeardownBinding,
 		PrimitiveTeardownEnd,
-		PrimitiveTeardownCoverage
+		PrimitiveTeardownCoverage,
+		MPCAssetPostLoad,
+		MPCAssetBeginDestroy,
+		MPCAssetFinishDestroy,
+		MPCGCReferenceChain,
+		ReferenceCensus,
+		ReferenceCensusCoverage,
+		MPCAssetManagerLoadRequest,
+		MPCAssetManagerLoadComplete,
+		MPCAssetManagerUnload
 	};
 
 	enum class EReleaseCause : uint8
@@ -149,6 +158,18 @@ namespace UE::RHI::ResourceProvenance
 		const void* FlagsAddress,
 		uint8 ResourceType,
 		const TCHAR* Text);
+
+	/** Records a text-bearing resource event without dereferencing the resource. */
+	RHI_API void RecordResourceTextEvent(
+		EOperation Operation,
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		const void* FlagsAddress,
+		uint8 ResourceType,
+		uint32 PackedValue,
+		const TCHAR* Text,
+		uint64 CallerAddress,
+		uint64 CorrelationId = 0);
 
 	RHI_API void Record(
 		EOperation Operation,

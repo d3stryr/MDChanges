@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [25fcc7903b40c9fc46f003608d08e9a152ccbb77](https://github.com/d3stryr/UnrealEngine/commit/25fcc7903b40c9fc46f003608d08e9a152ccbb77)
+- Source commit: [5ee8593e36126a9022dc5f2589d1a7c5a2638531](https://github.com/d3stryr/UnrealEngine/commit/5ee8593e36126a9022dc5f2589d1a7c5a2638531)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -17,16 +17,18 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | File | Source blob | Status | Purpose |
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
-| `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `9827be46a395f60b1ba86b335fb74ff4f9eed494` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, owner tokens, command correlation, cached-binding lineage, and causal/ownership timelines. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `02939db02153813c21194dafb1aa3aaaeb94c4ee` | Added | Bounded recorder, retained identities, journal, access/release owners, deduplicated generation-safe bindings, GC state, and scene-map timelines. |
-| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `3d8e2d7a0e867da2344cc31743a8ae3d47d08dfc` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, name/owner capture, and compact typed provenance events. |
+| `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `f86f40c258b6dc9daf9644bcaa9f1736929b2512` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, owner tokens, command correlation, cached-binding lineage, and causal/ownership timelines. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `fec9125ea8af7a45a8915c0613dba1f0021b87d5` | Added | Bounded recorder, retained identities, journal, access/release owners, deduplicated generation-safe bindings, GC state, and scene-map timelines. |
+| `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `6b37d78d0848edad480d40348d35ef391f708717` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, name/owner capture, and compact typed provenance events. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
-| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `880c4ea974632d589101b2a09f8929f510d7c20b` | Added | Filters journals and emits TSV with owners, command/binding IDs, causal IDs, GC state, and scene-refresh correlations. |
-| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `e813a02587e210c39516927799537db12236827f` | Modified | Adds path/release/fixed-event APIs and carries diagnostic causal IDs into render-thread MPC updates. |
-| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `56506a86985011a813fc8b6f647b7fb755d69402` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
-| `Engine/Source/Runtime/Engine/Private/World.cpp` | `a2644b40e5eafb54eb0d88dd8662b02174fab23a` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
+| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `14b0ea69d1b3f65ab21ff7f2906e510a79448b04` | Added | Filters journals and emits TSV with owners, command/binding IDs, causal IDs, GC state, and scene-refresh correlations. |
+| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `318c4ccc86833bd24bc182002cab56a36296f664` | Modified | Adds path/release/fixed-event APIs and carries diagnostic causal IDs into render-thread MPC updates. |
+| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `fd312932b954b47a958442ac4a03b78726a3acb2` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
+| `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
+| `Engine/Source/Runtime/Engine/Private/AssetManager.cpp` | `5b5bfe6ab907428555b350025f5849684479ac3c` | Modified | Records MPC primary-asset bundle requests, load completion handles, and unload state before managed handles are reset. |
+| `Engine/Source/Runtime/Engine/Private/World.cpp` | `fb79b3df63b135a8985ba15ec6dbc764a7f7af7e` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
 | `Engine/Source/Runtime/Engine/Classes/Engine/World.h` | `866f41cd9c1bf4009d4503b60bee347f79cc913d` | Modified | Registers a diagnostic pre-GC callback so MPC retention state can be compared before and after collection. |
 | `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `1c9da27f97c484afde8a5fad94d64b8c3cd60ee9` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
 | `Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h` | `2d3862f28881e76987746750f72bef3c4fc60e0d` | Modified | Stores the bounded contributor ID used by cached MPC binding sidecars. |
@@ -366,15 +368,76 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - Added bounded identity, lifecycle, AddRef/Release, deletion, and optional command-use instrumentation.
 - Established this file as the synchronization record for future changes.
 
-## Next features in sequence
+## 2026-09-25 — close the original ten-feature responsibility plan
 
-### Feature 10 — exact Data Layer-to-cell causal fan-in
+The original ten requested capabilities have now been reconciled against the engine branch instead of relying on later internal feature numbering.
+
+| # | Capability | Status | Concrete implementation |
+|---|---|---|---|
+| 1 | Targeted GC root-loss recorder | Complete | Existing pre/post-GC state is augmented with one healthy baseline and suspicious targeted `FReferenceChainSearch` snapshots for the configured MPC. |
+| 2 | Asset load/unload provenance | Complete | Records MPC `PostLoad`, `BeginDestroy`, and `FinishDestroy`, plus `UAssetManager` bundle/load-complete/unload events with manager class, primary ID, handle addresses, bundle counts, object flags, linker state, and caller PC. |
+| 3 | MPC generation lineage | Complete | Collection → world instance → render resource → exact uniform-buffer generation IDs are already linked. |
+| 4 | Scene MPC map mutation audit | Complete | Existing insert/remove/old-new replacement rows remain unchanged. |
+| 5 | Cached draw-command lifetime audit | Complete | Existing binding lineage, live-copy snapshots, invalidation, submission, and release rows remain unchanged. |
+| 6 | Actor/component contributor tracking | Complete | Existing primitive, actor, component, material/proxy, cell, and Data Layer descriptors remain unchanged. |
+| 7 | Bounded ref-operation census | Complete | Each promoted generation retains 32 AddRef/Release/final-release callsites, journals aggregate counts at `FinalRelease`, sets saturation bits, and emits omitted-operation coverage. Ordinary per-operation rows remain ring-only. |
+| 8 | Cross-thread causal timeline | Complete | Existing game/render/RHI causal IDs, deferred command correlations, frame/cycle/thread data, cell transitions, and Data Layer transitions remain unchanged. |
+| 9 | Targeted escalation after release | Complete | Existing selective final-release/physical-free/stale enqueue/stale execute stacks stay capped at 256 deeper command captures. |
+| 10 | Automated responsibility report | Complete | Decoder `--responsibility-report --id <generation>` performs bounded multi-pass joins and emits a Markdown verdict, confidence, the five responsibility sections, exact evidence, and coverage gaps. |
+
+### New recorder operations
+
+Operations 71–79 were appended without changing the version-1 binary record layout:
+
+- `MPCAssetPostLoad`, `MPCAssetBeginDestroy`, `MPCAssetFinishDestroy`;
+- `MPCGCReferenceChain`;
+- `ReferenceCensus`, `ReferenceCensusCoverage`;
+- `MPCAssetManagerLoadRequest`, `MPCAssetManagerLoadComplete`, `MPCAssetManagerUnload`.
+
+Reference census rows pack AddRef count in bits 0–11, Release count in bits 12–23, final-release count in bits 24–27, and saturation flags in bits 28–30. The row caller is the callsite PC; correlation stores its last observed cycle.
+
+### Targeting and use
+
+Default targeted root-chain settings:
+
+`r.RHI.ResourceProvenance.MPCReferenceChains 1`  
+`r.RHI.ResourceProvenance.MPCTarget MPC_GlobalEnvironment`  
+`r.RHI.ResourceProvenance.MaxMPCReferenceChainCaptures 4`
+
+Generate the joined report:
+
+`python DecodeRHIResourceProvenance.py <journal.rhiprov> --id <generation-id> --responsibility-report --output responsibility.md`
+
+Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and command responsibility. All new runtime code remains behind the existing Development/Debug provenance build gate; `GUniformBufferReleasehistory` is unchanged.
+
+### Bounds and interpretation
+
+- Reference-chain search is target-only, records one healthy baseline, then only suspicious states where the collection is neither rooted nor standalone.
+- The reference census starts when a resource is promoted into the existing retained-priority table; earlier unassociated reference traffic remains available only in volatile rings.
+- Text remains capped by the existing 256-TCHAR journal record and reports truncation through existing record flags.
+- The responsibility report does not silently invent blame: a post-final-release use produces a high-confidence stale-binding/command verdict; incomplete joins are downgraded and listed under coverage gaps.
+- Python syntax/help validation and a synthetic journal test covering Asset lifecycle → binding snapshot → final release → census → post-release submit/execute passed.
+- This revision has not been compiled with the PS5 SDK/toolchain.
+
+### Source revision
+
+- Engine commit: `5ee8593e36126a9022dc5f2589d1a7c5a2638531`
+- Changed source blobs:
+  - `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h`: `f86f40c258b6dc9daf9644bcaa9f1736929b2512`
+  - `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp`: `fec9125ea8af7a45a8915c0613dba1f0021b87d5`
+  - `Engine/Source/Runtime/RHI/Public/RHIResources.h`: `6b37d78d0848edad480d40348d35ef391f708717`
+  - `Engine/Source/Runtime/Engine/Public/ParameterCollection.h`: `318c4ccc86833bd24bc182002cab56a36296f664`
+  - `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp`: `fd312932b954b47a958442ac4a03b78726a3acb2`
+  - `Engine/Source/Runtime/Engine/Private/World.cpp`: `fb79b3df63b135a8985ba15ec6dbc764a7f7af7e`
+  - `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py`: `14b0ea69d1b3f65ab21ff7f2906e510a79448b04`
+  - `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h`: `0c1b13751ff5eaf37ea109243970d8af4a95e886`
+  - `Engine/Source/Runtime/Engine/Private/AssetManager.cpp`: `5b5bfe6ab907428555b350025f5849684479ac3c`
+
+## Next enhancement in sequence
+
+### Exact Data Layer-to-cell causal fan-in
 
 Persist the last effective-state transition ID beside each runtime Data Layer and emit bounded links from every runtime-cell transition to the Data Layer transition(s) that changed that cell's effective wanted state. Multiple contributing Data Layers, unchanged/background streaming requests, and missing/omitted causes must be explicit so the first edge of the chain is causal rather than a name/time inference.
-
-### Feature 11 — offline incident reconstruction
-
-Extend the decoder with an incident mode that starts from the stale MPC resource generation and walks release snapshots, binding lineage, primitive teardown, contributor metadata, runtime-cell transitions, and Data Layer causes into one ordered report without adding runtime instrumentation or ownership.
 
 ## Synchronization rule
 

@@ -105,6 +105,15 @@ OPERATION_NAMES = {
     68: "PrimitiveTeardownBinding",
     69: "PrimitiveTeardownEnd",
     70: "PrimitiveTeardownCoverage",
+    71: "MPCAssetPostLoad",
+    72: "MPCAssetBeginDestroy",
+    73: "MPCAssetFinishDestroy",
+    74: "MPCGCReferenceChain",
+    75: "ReferenceCensus",
+    76: "ReferenceCensusCoverage",
+    77: "MPCAssetManagerLoadRequest",
+    78: "MPCAssetManagerLoadComplete",
+    79: "MPCAssetManagerUnload",
 }
 
 DATA_LAYER_STATE_NAMES = {
@@ -164,6 +173,18 @@ RELEASE_CAUSE_NAMES = {
     9: "SceneMapRemove",
     10: "SceneMapReplace",
 }
+
+MPC_ASSET_STATE_FLAGS = (
+    (0, "rooted"),
+    (1, "standalone"),
+    (2, "public"),
+    (3, "transient"),
+    (4, "begin_destroyed"),
+    (5, "finish_destroyed"),
+    (6, "was_loaded"),
+    (7, "async_loading"),
+    (8, "has_linker"),
+)
 
 GC_STATE_FLAGS = (
     (0, "collection_valid"),
@@ -532,7 +553,330 @@ def decode_packed_detail(record: Record) -> str:
             "omitted_primitive_teardowns="
             f"{record.packed_value & 0x7fffffff}"
         )
+    if 71 <= record.operation <= 73 or 77 <= record.operation <= 79:
+        enabled = [
+            name for bit, name in MPC_ASSET_STATE_FLAGS
+            if record.packed_value & (1 << bit)
+        ]
+        return ",".join(enabled) if enabled else "no_asset_state_flags"
+    if record.operation == 74:
+        return f"reference_chains={record.packed_value}"
+    if record.operation == 75:
+        flags = []
+        if record.packed_value & (1 << 28):
+            flags.append("addref_saturated")
+        if record.packed_value & (1 << 29):
+            flags.append("release_saturated")
+        if record.packed_value & (1 << 30):
+            flags.append("final_release_saturated")
+        flag_text = ",".join(flags) if flags else "none"
+        return (
+            f"addrefs={record.packed_value & 0xfff},"
+            f"releases={(record.packed_value >> 12) & 0xfff},"
+            f"final_releases={(record.packed_value >> 24) & 0xf},"
+            f"census_flags={flag_text},last_cycles={record.correlation_id}"
+        )
+    if record.operation == 76:
+        return f"omitted_reference_operations={record.packed_value}"
     return ""
+
+
+
+REPORT_EVIDENCE_LIMIT = 12
+
+
+def _append_report_evidence(bucket: list[Record], record: Record) -> None:
+    key = (
+        record.cycles,
+        record.operation,
+        record.resource_id,
+        record.caller_address,
+        record.correlation_id,
+        record.text,
+    )
+    if any(
+        (
+            item.cycles,
+            item.operation,
+            item.resource_id,
+            item.caller_address,
+            item.correlation_id,
+            item.text,
+        ) == key
+        for item in bucket
+    ):
+        return
+    bucket.append(record)
+    if len(bucket) > REPORT_EVIDENCE_LIMIT:
+        del bucket[0]
+
+
+def _report_event(record: Record, header: FileHeader) -> str:
+    seconds = (record.cycles - header.start_cycles) * header.seconds_per_cycle
+    detail = decode_packed_detail(record)
+    suffix = "; ".join(part for part in (detail, sanitize_tsv(record.text)) if part)
+    if suffix:
+        suffix = f" — {suffix}"
+    return (
+        f"+{seconds:.6f}s {OPERATION_NAMES.get(record.operation, f'Unknown({record.operation})')} "
+        f"thread={record.thread_id} caller=0x{record.caller_address:x} "
+        f"correlation={record.correlation_id}{suffix}"
+    )
+
+
+def generate_responsibility_report(
+    journal: pathlib.Path,
+    resource_id: int,
+    output_stream,
+) -> int:
+    buckets: dict[str, list[Record]] = {
+        "root": [],
+        "instance": [],
+        "release": [],
+        "binding": [],
+        "command": [],
+        "coverage": [],
+    }
+    operation_counts: dict[int, int] = {}
+    binding_ids: set[int] = set()
+    contributor_ids: set[int] = set()
+    teardown_ids: set[int] = set()
+    cell_addresses: set[int] = set()
+    data_layer_addresses: set[int] = set()
+    target_records: list[Record] = []
+    total = 0
+
+    with journal.open("rb") as stream:
+        header = read_file_header(stream)
+        for record in iter_records(stream):
+            total += 1
+            if record.resource_id != resource_id:
+                continue
+
+            operation_counts[record.operation] = operation_counts.get(record.operation, 0) + 1
+            if record.operation in {
+                3, 10, 11, 12, 19, 26, 36, 43, 72, 73, 75, 79
+            }:
+                target_records.append(record)
+                if len(target_records) > 4096:
+                    del target_records[:2048]
+
+            if record.operation in (34, 35, 36, 37, 71, 72, 73, 74, 77, 78, 79):
+                _append_report_evidence(buckets["root"], record)
+            if record.operation in (38, 39, 40, 41, 42, 43, 44, 72, 73, 79):
+                _append_report_evidence(buckets["instance"], record)
+            if record.operation in (3, 4, 5, 6, 7, 8, 9, 10, 20, 21, 42, 75, 76):
+                _append_report_evidence(buckets["release"], record)
+            if record.operation in (18, 19, 23, 24, 25, 26, 27, 28, 29, 43, 44, 51):
+                _append_report_evidence(buckets["binding"], record)
+            if record.operation in (11, 12, 22, 30, 31, 32, 33):
+                _append_report_evidence(buckets["command"], record)
+            if record.operation in (37, 44, 52, 58, 65, 70, 76):
+                _append_report_evidence(buckets["coverage"], record)
+
+            if 23 <= record.operation <= 29 or record.operation in (43, 51):
+                if record.correlation_id:
+                    binding_ids.add(record.correlation_id)
+            if record.operation == 51 and record.caller_address:
+                contributor_ids.add(record.caller_address)
+
+    if not target_records:
+        print(f"# RHI Responsibility Report — resource {resource_id}", file=output_stream)
+        print("", file=output_stream)
+        print("No records matched this resource ID.", file=output_stream)
+        return 2
+
+    # Resolve cached bindings into primitive contributors and teardown correlations.
+    with journal.open("rb") as stream:
+        read_file_header(stream)
+        for record in iter_records(stream):
+            related_binding = (
+                (23 <= record.operation <= 29 or record.operation in (43, 51))
+                and record.correlation_id in binding_ids
+            )
+            teardown_binding = (
+                record.operation == 68 and record.caller_address in binding_ids
+            )
+            if related_binding or teardown_binding:
+                _append_report_evidence(buckets["binding"], record)
+                if record.operation == 51 and record.caller_address:
+                    contributor_ids.add(record.caller_address)
+                if record.operation == 68:
+                    if record.resource_id:
+                        contributor_ids.add(record.resource_id)
+                    if record.correlation_id:
+                        teardown_ids.add(record.correlation_id)
+
+    # Resolve contributor metadata and the primitive teardown that touched the binding.
+    with journal.open("rb") as stream:
+        read_file_header(stream)
+        for record in iter_records(stream):
+            related_contributor = (
+                (45 <= record.operation <= 50 or record.operation == 52)
+                and record.correlation_id in contributor_ids
+            )
+            related_teardown = (
+                66 <= record.operation <= 70
+                and (
+                    record.resource_id in contributor_ids
+                    or record.correlation_id in teardown_ids
+                )
+            )
+            if related_contributor or related_teardown:
+                _append_report_evidence(buckets["binding"], record)
+                if record.operation == 48 and record.resource_address:
+                    cell_addresses.add(record.resource_address)
+                if record.operation == 49 and record.resource_address:
+                    data_layer_addresses.add(record.resource_address)
+                if record.operation in (52, 70):
+                    _append_report_evidence(buckets["coverage"], record)
+
+    # Resolve the Data Layer and runtime-cell transitions for those contributors.
+    with journal.open("rb") as stream:
+        read_file_header(stream)
+        for record in iter_records(stream):
+            related_data_layer = (
+                53 <= record.operation <= 58
+                and (
+                    record.resource_address in data_layer_addresses
+                    or record.operation == 58
+                )
+            )
+            related_cell = (
+                59 <= record.operation <= 65
+                and (
+                    record.resource_address in cell_addresses
+                    or record.operation == 65
+                )
+            )
+            if related_data_layer or related_cell:
+                _append_report_evidence(buckets["instance"], record)
+                if record.operation in (58, 65):
+                    _append_report_evidence(buckets["coverage"], record)
+
+    final_release_cycles = [
+        record.cycles for record in target_records if record.operation == 3
+    ]
+    physical_free_cycles = [
+        record.cycles for record in target_records if record.operation == 10
+    ]
+    death_cycle = min(final_release_cycles or physical_free_cycles or [0])
+    stale_after_release = [
+        record
+        for record in target_records
+        if death_cycle
+        and record.cycles > death_cycle
+        and record.operation in (11, 12, 19, 26)
+    ]
+    live_binding_snapshots = [
+        record
+        for record in target_records
+        if record.operation == 43 and ((record.packed_value >> 16) & 0xff) > 0
+    ]
+    asset_teardown = [
+        record for record in target_records if record.operation in (36, 72, 73, 79)
+    ]
+    has_census = operation_counts.get(75, 0) > 0
+
+    if stale_after_release and final_release_cycles:
+        confidence = "High"
+        verdict = (
+            "A cached binding or queued command retained this MPC uniform-buffer "
+            "generation and used/submitted it after FinalRelease."
+        )
+    elif live_binding_snapshots and (final_release_cycles or physical_free_cycles):
+        confidence = "Medium"
+        verdict = (
+            "The MPC generation entered RHI teardown while cached binding copies "
+            "were still live; this journal does not contain a confirmed post-release use."
+        )
+    elif asset_teardown and (final_release_cycles or physical_free_cycles):
+        confidence = "Medium"
+        verdict = (
+            "MPC asset/GC teardown causally preceded the RHI generation release, "
+            "but stale-holder or post-release command evidence is incomplete."
+        )
+    elif final_release_cycles or physical_free_cycles:
+        confidence = "Low"
+        verdict = (
+            "The final RHI release is present, but the journal does not establish "
+            "which higher-level owner or stale binding caused the crash."
+        )
+    else:
+        confidence = "Low"
+        verdict = "No final release for this resource generation was found."
+
+    gaps: list[str] = []
+    if not buckets["root"]:
+        gaps.append("No targeted GC/asset lifecycle evidence for this generation.")
+    if not has_census:
+        gaps.append("No persistent AddRef/Release callsite census reached FinalRelease.")
+    if not binding_ids:
+        gaps.append("No cached-binding ID was linked to this generation.")
+    if not buckets["command"]:
+        gaps.append("No command enqueue/execute causal rows were recorded; verify CommandUses=1.")
+    for record in buckets["coverage"]:
+        gaps.append(_report_event(record, header))
+    if not gaps:
+        gaps.append("No explicit bounded-capture omissions were recorded.")
+
+    release_callers = sorted(
+        {
+            record.caller_address
+            for record in target_records
+            if record.operation in (3, 10, 42) and record.caller_address
+        }
+    )
+    census_callers = sorted(
+        {
+            record.caller_address
+            for record in target_records
+            if record.operation == 75 and record.caller_address
+        }
+    )
+
+    print(f"# RHI Responsibility Report — resource {resource_id}", file=output_stream)
+    print("", file=output_stream)
+    print(f"- Confidence: **{confidence}**", file=output_stream)
+    print(f"- Verdict: {verdict}", file=output_stream)
+    print(f"- Journal records scanned: {total}", file=output_stream)
+    print(f"- Cached binding IDs: {', '.join(map(str, sorted(binding_ids))) or 'none'}", file=output_stream)
+    print(f"- Primitive contributor IDs: {', '.join(map(str, sorted(contributor_ids))) or 'none'}", file=output_stream)
+    print(
+        "- Final-release callers: "
+        + (", ".join(f"0x{caller:x}" for caller in release_callers) or "none"),
+        file=output_stream,
+    )
+    print(
+        "- Reference-census callsites: "
+        + (", ".join(f"0x{caller:x}" for caller in census_callers) or "none"),
+        file=output_stream,
+    )
+
+    sections = (
+        ("1. Asset reachability / root loss", "root"),
+        ("2. World instance and scene-map teardown", "instance"),
+        ("3. Final RHI release and ref census", "release"),
+        ("4. Stale binding and primitive contributors", "binding"),
+        ("5. Command submission / execution", "command"),
+    )
+    for title, key in sections:
+        print("", file=output_stream)
+        print(f"## {title}", file=output_stream)
+        print("", file=output_stream)
+        evidence = buckets[key]
+        if not evidence:
+            print("- No matching evidence.", file=output_stream)
+        else:
+            for record in sorted(evidence, key=lambda item: item.cycles):
+                print(f"- {_report_event(record, header)}", file=output_stream)
+
+    print("", file=output_stream)
+    print("## Coverage gaps", file=output_stream)
+    print("", file=output_stream)
+    for gap in gaps:
+        print(f"- {gap}", file=output_stream)
+    return 0
 
 
 def record_matches(
@@ -671,14 +1015,33 @@ def main() -> int:
         dest="primitive_teardown_id",
         help="Emit primitive removal, cache removal, and binding invalidation/release bridge rows for one teardown id.",
     )
+    parser.add_argument(
+        "--responsibility-report",
+        action="store_true",
+        help="Join the MPC lifecycle, release, binding, contributor, World Partition, and command evidence into a Markdown verdict. Requires --id.",
+    )
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
+
+    if args.responsibility_report and args.resource_id is None:
+        parser.error("--responsibility-report requires --id")
 
     output_stream = (
         args.output.open("w", encoding="utf-8", newline="")
         if args.output
         else sys.stdout
     )
+
+    if args.responsibility_report:
+        try:
+            return generate_responsibility_report(
+                args.journal,
+                args.resource_id,
+                output_stream,
+            )
+        finally:
+            if args.output:
+                output_stream.close()
 
     matched = 0
     total = 0

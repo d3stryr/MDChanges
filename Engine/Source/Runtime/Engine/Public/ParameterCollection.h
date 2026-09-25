@@ -50,6 +50,14 @@ public:
 		uint32 PackedValue,
 		uint64 CallerAddress,
 		uint64 CorrelationId = 0);
+
+	/** Queue a bounded text-bearing lifecycle event using copied game-thread identity. */
+	void GameThread_RecordProvenanceTextEvent(
+		UE::RHI::ResourceProvenance::EOperation Operation,
+		uint32 PackedValue,
+		FString InText,
+		uint64 CallerAddress,
+		uint64 CorrelationId = 0);
 #endif
 
 	/** Destroy, called from the game thread. */

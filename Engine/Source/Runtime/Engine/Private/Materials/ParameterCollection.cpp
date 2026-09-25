@@ -32,11 +32,90 @@ FAutoConsoleVariableRef CVarMaterialParameterCollectionMaxVectorStorage(
 
 TMultiMap<FGuid, FMaterialParameterCollectionInstanceResource*> GDefaultMaterialParameterCollectionInstances;
 
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+namespace
+{
+	uint32 BuildMPCAssetProvenanceState(const UMaterialParameterCollection* Collection)
+	{
+		if (!Collection)
+		{
+			return 0;
+		}
+
+		uint32 State = 0;
+		State |= Collection->IsRooted() ? 1u << 0 : 0u;
+		State |= Collection->HasAnyFlags(RF_Standalone) ? 1u << 1 : 0u;
+		State |= Collection->HasAnyFlags(RF_Public) ? 1u << 2 : 0u;
+		State |= Collection->HasAnyFlags(RF_Transient) ? 1u << 3 : 0u;
+		State |= Collection->HasAnyFlags(RF_BeginDestroyed) ? 1u << 4 : 0u;
+		State |= Collection->HasAnyFlags(RF_FinishDestroyed) ? 1u << 5 : 0u;
+		State |= Collection->HasAnyFlags(RF_WasLoaded) ? 1u << 6 : 0u;
+		State |= Collection->HasAnyInternalFlags(EInternalObjectFlags::AsyncLoading) ? 1u << 7 : 0u;
+		State |= Collection->GetLinker() != nullptr ? 1u << 8 : 0u;
+		return State;
+	}
+
+	FString BuildMPCAssetProvenanceText(const UMaterialParameterCollection* Collection, const TCHAR* Event)
+	{
+		return FString::Printf(
+			TEXT("event=%s collection=%s package=%s primary_asset=%s has_linker=%d async_loading=%d"),
+			Event,
+			*GetPathNameSafe(Collection),
+			Collection ? *Collection->GetOutermost()->GetName() : TEXT("<null>"),
+			Collection ? *Collection->GetPrimaryAssetId().ToString() : TEXT("<null>"),
+			Collection && Collection->GetLinker() ? 1 : 0,
+			Collection && Collection->HasAnyInternalFlags(EInternalObjectFlags::AsyncLoading) ? 1 : 0);
+	}
+}
+#endif
+
 UMaterialParameterCollection::UMaterialParameterCollection(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 	, ReleasedByRT(true)
 {
 	DefaultResource = nullptr;
+}
+
+void UMaterialParameterCollection::RecordAssetManagerProvenance(
+	EMPCAssetProvenancePhase Phase,
+	FString Details,
+	uint64 CallerAddress)
+{
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	if (!DefaultResource)
+	{
+		return;
+	}
+
+	UE::RHI::ResourceProvenance::EOperation Operation;
+	const TCHAR* Event = TEXT("AssetManagerUnknown");
+	switch (Phase)
+	{
+	case EMPCAssetProvenancePhase::AssetManagerLoadRequest:
+		Operation = UE::RHI::ResourceProvenance::EOperation::MPCAssetManagerLoadRequest;
+		Event = TEXT("AssetManagerLoadRequest");
+		break;
+	case EMPCAssetProvenancePhase::AssetManagerLoadComplete:
+		Operation = UE::RHI::ResourceProvenance::EOperation::MPCAssetManagerLoadComplete;
+		Event = TEXT("AssetManagerLoadComplete");
+		break;
+	case EMPCAssetProvenancePhase::AssetManagerUnload:
+		Operation = UE::RHI::ResourceProvenance::EOperation::MPCAssetManagerUnload;
+		Event = TEXT("AssetManagerUnload");
+		break;
+	default:
+		return;
+	}
+
+	FString Text = BuildMPCAssetProvenanceText(this, Event);
+	Text += TEXT(" ");
+	Text += MoveTemp(Details);
+	DefaultResource->GameThread_RecordProvenanceTextEvent(
+		Operation,
+		BuildMPCAssetProvenanceState(this),
+		MoveTemp(Text),
+		CallerAddress);
+#endif
 }
 
 void UMaterialParameterCollection::PostInitProperties()
@@ -81,6 +160,16 @@ void UMaterialParameterCollection::PostLoad()
 	CreateBufferStruct();
 	SetupWorldParameterCollectionInstances();
 	UpdateDefaultResource(true);
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	if (DefaultResource)
+	{
+		DefaultResource->GameThread_RecordProvenanceTextEvent(
+			UE::RHI::ResourceProvenance::EOperation::MPCAssetPostLoad,
+			BuildMPCAssetProvenanceState(this),
+			BuildMPCAssetProvenanceText(this, TEXT("PostLoad")),
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
+	}
+#endif
 }
 
 void UMaterialParameterCollection::SetupWorldParameterCollectionInstances()
@@ -101,6 +190,13 @@ void UMaterialParameterCollection::BeginDestroy()
 {
 	if (DefaultResource)
 	{
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		DefaultResource->GameThread_RecordProvenanceTextEvent(
+			UE::RHI::ResourceProvenance::EOperation::MPCAssetBeginDestroy,
+			BuildMPCAssetProvenanceState(this),
+			BuildMPCAssetProvenanceText(this, TEXT("BeginDestroy")),
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
+#endif
 		ReleasedByRT = false;
 
 		FMaterialParameterCollectionInstanceResource* Resource = DefaultResource;
@@ -147,6 +243,11 @@ void UMaterialParameterCollection::FinishDestroy()
 	if (DefaultResource)
 	{
 #if RHI_RESOURCE_PROVENANCE_ENABLED
+		DefaultResource->GameThread_RecordProvenanceTextEvent(
+			UE::RHI::ResourceProvenance::EOperation::MPCAssetFinishDestroy,
+			BuildMPCAssetProvenanceState(this),
+			BuildMPCAssetProvenanceText(this, TEXT("FinishDestroy")),
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
 		DefaultResource->GameThread_RecordProvenanceReleaseOwner(
 			FString::Printf(TEXT("cause=MPCAssetFinishDestroy collection=%s"), *GetPathName()));
 		DefaultResource->GameThread_RecordProvenanceReleaseCause(
@@ -1276,6 +1377,35 @@ void FMaterialParameterCollectionInstanceResource::GameThread_RecordProvenanceEv
 				Resource->UniformBuffer->RecordProvenanceEvent(
 					Operation,
 					PackedValue,
+					CallerAddress,
+					CorrelationId);
+			}
+		}
+	);
+}
+
+void FMaterialParameterCollectionInstanceResource::GameThread_RecordProvenanceTextEvent(
+	UE::RHI::ResourceProvenance::EOperation Operation,
+	uint32 PackedValue,
+	FString InText,
+	uint64 CallerAddress,
+	uint64 CorrelationId)
+{
+	if (UNLIKELY(!FApp::CanEverRender()))
+	{
+		return;
+	}
+
+	FMaterialParameterCollectionInstanceResource* Resource = this;
+	ENQUEUE_RENDER_COMMAND(RecordCollectionProvenanceTextEventCommand)(
+		[Resource, Operation, PackedValue, Text = MoveTemp(InText), CallerAddress, CorrelationId](FRHICommandListImmediate&)
+		{
+			if (Resource->UniformBuffer.IsValid())
+			{
+				Resource->UniformBuffer->RecordProvenanceTextEvent(
+					Operation,
+					PackedValue,
+					*Text,
 					CallerAddress,
 					CorrelationId);
 			}

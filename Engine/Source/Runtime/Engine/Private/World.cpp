@@ -29,6 +29,9 @@ Total output lines: 11017
 #include "SceneView.h"
 #include "UObject/ObjectSaveContext.h"
 #include "UObject/UObjectAnnotation.h"
+#include "UObject/ReferenceChainSearch.h"
+#include "HAL/ThreadSafeBool.h"
+#include "HAL/ThreadSafeCounter.h"
 #include "Misc/PackageName.h"
 #include "Misc/DataValidation.h"
 #include "GameMapsSettings.h"
@@ -315,6 +318,28 @@ static TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxMPCGCInstancesPer
 	TEXT("Maximum MPC instance resources recorded per world in each pre/post-GC phase. ")
 	TEXT("The recorder emits GCCoverageOmitted when additional instances are skipped."),
 	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMPCReferenceChains(
+	TEXT("r.RHI.ResourceProvenance.MPCReferenceChains"),
+	1,
+	TEXT("Captures one healthy baseline and suspicious UObject reference chains for the targeted MPC."),
+	ECVF_Default);
+
+static FString GRHIResourceProvenanceMPCTarget(TEXT("MPC_GlobalEnvironment"));
+static FAutoConsoleVariableRef CVarRHIResourceProvenanceMPCTarget(
+	TEXT("r.RHI.ResourceProvenance.MPCTarget"),
+	GRHIResourceProvenanceMPCTarget,
+	TEXT("Case-insensitive collection path fragment used by targeted MPC reference-chain capture."),
+	ECVF_Default);
+
+static TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxMPCReferenceChainCaptures(
+	TEXT("r.RHI.ResourceProvenance.MaxMPCReferenceChainCaptures"),
+	4,
+	TEXT("Maximum targeted MPC reference-chain snapshots captured during one process run."),
+	ECVF_Default);
+
+static FThreadSafeCounter GMPCReferenceChainCaptures;
+static FThreadSafeBool GMPCReferenceChainBaselineCaptured(false);
 #endif
 
 static int32 GGroupedComponentMovementBufferSize = 20;
@@ -1970,6 +1995,69 @@ namespace
 			1,
 			4096);
 	}
+
+	void RecordTargetedMPCReferenceChain(
+		UMaterialParameterCollection* Collection,
+		FMaterialParameterCollectionInstanceResource* Resource,
+		uint64 CallerAddress)
+	{
+		if (!Collection || !Resource ||
+			CVarRHIResourceProvenanceMPCReferenceChains.GetValueOnGameThread() == 0 ||
+			GRHIResourceProvenanceMPCTarget.IsEmpty() ||
+			!Collection->GetPathName().Contains(GRHIResourceProvenanceMPCTarget, ESearchCase::IgnoreCase))
+		{
+			return;
+		}
+
+		const bool bSuspicious =
+			!Collection->IsRooted() &&
+			!Collection->HasAnyFlags(RF_Standalone);
+		if (!bSuspicious && GMPCReferenceChainBaselineCaptured)
+		{
+			return;
+		}
+
+		const int32 MaximumCaptures = FMath::Clamp(
+			CVarRHIResourceProvenanceMaxMPCReferenceChainCaptures.GetValueOnGameThread(),
+			1,
+			64);
+		if (GMPCReferenceChainCaptures.GetValue() >= MaximumCaptures)
+		{
+			return;
+		}
+		if (!bSuspicious && GMPCReferenceChainBaselineCaptured.AtomicSet(true))
+		{
+			return;
+		}
+		if (GMPCReferenceChainCaptures.Increment() > MaximumCaptures)
+		{
+			return;
+		}
+
+		FReferenceChainSearch Search(
+			Collection,
+			EReferenceChainSearchMode::ExternalOnly | EReferenceChainSearchMode::Shortest);
+		FString RootPath = Search.GetRootPath(Collection);
+		RootPath.ReplaceInline(TEXT("\r"), TEXT(" "));
+		RootPath.ReplaceInline(TEXT("\n"), TEXT(" "));
+		if (RootPath.IsEmpty())
+		{
+			RootPath = TEXT("<no external root path>");
+		}
+
+		const uint32 ChainCount = static_cast<uint32>(
+			FMath::Min(Search.GetReferenceChains().Num(), static_cast<int32>(MAX_uint16)));
+		Resource->GameThread_RecordProvenanceTextEvent(
+			UE::RHI::ResourceProvenance::EOperation::MPCGCReferenceChain,
+			ChainCount,
+			FString::Printf(
+				TEXT("phase=%s collection=%s chains=%u root_path=%s"),
+				bSuspicious ? TEXT("suspicious") : TEXT("baseline"),
+				*Collection->GetPathName(),
+				ChainCount,
+				*RootPath),
+			CallerAddress);
+	}
 }
 #endif
 
@@ -2115,19 +2203,27 @@ void UWorld::OnPreGC()
 
 	for (UMaterialParameterCollectionInstance* Instance : ParameterCollectionInstances)
 	{
-		if (RecordedCount >= RecordLimit || !Instance)
+		if (!Instance)
 		{
 			continue;
 		}
 
 		if (FMaterialParameterCollectionInstanceResource* Resource = Instance->GetResource())
 		{
-			Resource->GameThread_RecordProvenanceEvent(
-				UE::RHI::ResourceProvenance::EOperation::GCPreSnapshot,
-				BuildMPCGCProvenanceState(this, Instance),
+			RecordTargetedMPCReferenceChain(
+				const_cast<UMaterialParameterCollection*>(Instance->GetCollection()),
+				Resource,
 				CallerAddress);
-			FirstRecordedResource = FirstRecordedResource ? FirstRecordedResource : Resource;
-			++RecordedCount;
+
+			if (RecordedCount < RecordLimit)
+			{
+				Resource->GameThread_RecordProvenanceEvent(
+					UE::RHI::ResourceProvenance::EOperation::GCPreSnapshot,
+					BuildMPCGCProvenanceState(this, Instance),
+					CallerAddress);
+				FirstRecordedResource = FirstRecordedResource ? FirstRecordedResource : Resource;
+				++RecordedCount;
+			}
 		}
 	}
 
