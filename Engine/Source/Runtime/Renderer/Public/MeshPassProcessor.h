@@ -990,6 +990,9 @@ public:
 			Other.Data.SetHeapData(nullptr);
 		}
 		Other.Size = 0;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		MoveProvenanceFrom(Other);
+#endif
 	}
 
 	FMeshDrawShaderBindings(const FMeshDrawShaderBindings& Other)
@@ -1007,10 +1010,7 @@ public:
 
 	FMeshDrawShaderBindings& operator=(FMeshDrawShaderBindings&& Other)
 	{
-		if (!UsesInlineStorage())
-		{
-			delete[] Data.GetHeapData();
-		}
+		Release();
 		Size = Other.Size;
 		ShaderFrequencyBits = Other.ShaderFrequencyBits;
 		ShaderLayouts = MoveTemp(Other.ShaderLayouts);
@@ -1024,6 +1024,9 @@ public:
 			Other.Data.SetHeapData(nullptr);
 		}
 		Other.Size = 0;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		MoveProvenanceFrom(Other);
+#endif
 		return *this;
 	}
 
@@ -1033,6 +1036,11 @@ public:
 
 	/** Called once binding setup is complete. */
 	RENDERER_API void Finalize(const FMeshProcessorShaders* ShadersForDebugging);
+
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	/** Records an explicit cached-command removal before its binding storage is destroyed. */
+	RENDERER_API void RecordProvenanceInvalidation(uint64 CallerAddress) const;
+#endif
 
 	FORCEINLINE FMeshDrawSingleShaderBindings GetSingleShaderBindings(EShaderFrequency Frequency, int32& DataOffset)
 	{
@@ -1128,6 +1136,11 @@ private:
 	} Data = {};
 	uint16 ShaderFrequencyBits = 0;
 	uint16 Size = 0;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	// A logical lineage, not an owning RHI reference. Copies keep the same id so a
+	// stale submission can be connected to the binding that was originally built.
+	uint64 ProvenanceBindingId = 0;
+#endif
 
 	void Allocate(uint16 InSize)
 	{
@@ -1172,6 +1185,13 @@ private:
 	RENDERER_API void CopyFrom(const FMeshDrawShaderBindings& Other);
 
 	RENDERER_API void Release();
+
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	RENDERER_API void MoveProvenanceFrom(FMeshDrawShaderBindings& Other);
+	RENDERER_API void RecordProvenanceLifecycle(
+		UE::RHI::ResourceProvenance::EOperation Operation,
+		uint64 CallerAddress) const;
+#endif
 };
 
 class FReadOnlyMeshDrawSingleShaderBindings : public FMeshDrawShaderBindingsLayout
@@ -1231,6 +1251,11 @@ public:
 	const uint64* GetProvenanceOwnerStart() const
 	{
 		return reinterpret_cast<const uint64*>(Data + GetProvenanceOwnerOffset());
+	}
+
+	const uint64* GetProvenanceResourceIdStart() const
+	{
+		return reinterpret_cast<const uint64*>(Data + GetProvenanceResourceIdOffset());
 	}
 #endif
 
