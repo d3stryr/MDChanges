@@ -47,7 +47,11 @@ namespace UE::RHI::ResourceProvenance
 		BindingSubmit,
 		BindingRelease,
 		BindingOwner,
-		BindingInvalidate
+		BindingInvalidate,
+		CausalRequest,
+		CausalExecute,
+		CausalLink,
+		CausalResource
 	};
 
 	FORCEINLINE uint64 CaptureCallerAddress()
@@ -118,6 +122,20 @@ namespace UE::RHI::ResourceProvenance
 		const void* ResourceAddress,
 		uint64 BindingId,
 		uint64 OwnerKey,
+		uint64 CallerAddress);
+
+	/** Allocates and records bounded cross-thread causal tokens when command-use tracing is enabled. */
+	RHI_API uint64 AllocateCausalId();
+	RHI_API void RecordCausalPhase(
+		EOperation Operation,
+		uint64 CausalId,
+		const void* SubjectAddress,
+		uint32 Detail,
+		uint64 CallerAddress);
+	RHI_API uint64 SetCurrentCausalParent(uint64 CausalId);
+	RHI_API void RecordResourceCausalLink(
+		const void* ResourceAddress,
+		uint64 CausalId,
 		uint64 CallerAddress);
 
 	/**
