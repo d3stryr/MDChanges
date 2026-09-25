@@ -42,6 +42,7 @@ namespace
 	static constexpr uint32 PriorityOwnerPathCount = 4;
 	static constexpr uint32 PriorityAccessOwnerCount = 4;
 	static constexpr uint32 PriorityReleaseOwnerCount = 4;
+	static constexpr uint32 PriorityBindingStateCapacity = 16;
 	static constexpr uint32 AccessOwnerKeyCapacity = 64;
 	static constexpr uint32 StagedAccessOwnerCapacity = 16;
 	static constexpr uint32 OwnerLabelCapacity = 8192;
@@ -181,6 +182,17 @@ namespace
 		uint64 Frames[StackFramesPerCapture] {};
 	};
 
+	struct FPriorityBindingState
+	{
+		uint64 BindingId = 0;
+		uint64 OwnerKey = 0;
+		uint64 LastCallerAddress = 0;
+		uint32 LiveCopies = 0;
+		EOperation LastOperation = EOperation::ExternalUse;
+		bool bInvalidated = false;
+		bool bSubmitted = false;
+	};
+
 	struct FPriorityIdentity
 	{
 		mutable std::atomic_flag Writer = ATOMIC_FLAG_INIT;
@@ -204,6 +216,8 @@ namespace
 		TAtomicString<PathCapacity> AccessOwners[PriorityAccessOwnerCount];
 		uint32 ReleaseOwnerWriteIndex = 0;
 		TAtomicString<PathCapacity> ReleaseOwners[PriorityReleaseOwnerCount];
+		uint32 BindingStateOmitted = 0;
+		FPriorityBindingState BindingStates[PriorityBindingStateCapacity];
 		uint64 LastCommandOwnerKey = 0;
 		uint64 LastCommandOwnerCorrelation = 0;
 		TAtomicString<JournalTextCapacity> LastCommandOwner;
@@ -851,6 +865,10 @@ namespace
 		case EOperation::SceneMapRemove:
 		case EOperation::SceneMapReplaceOld:
 		case EOperation::SceneMapReplaceNew:
+		case EOperation::ReleaseCause:
+		case EOperation::ReleaseBindingSnapshot:
+		case EOperation::ReleaseBindingCoverage:
+		case EOperation::BindingContributor:
 			return true;
 		default:
 			return false;
@@ -884,6 +902,9 @@ namespace
 		case EOperation::SceneMapRemove:
 		case EOperation::SceneMapReplaceOld:
 		case EOperation::SceneMapReplaceNew:
+		case EOperation::ReleaseBindingSnapshot:
+		case EOperation::ReleaseBindingCoverage:
+		case EOperation::BindingContributor:
 			return EJournalRecordKind::CommandUse;
 		default:
 			return EJournalRecordKind::Lifecycle;
@@ -902,6 +923,8 @@ namespace
 	std::atomic<uint32> GNextThreadBuffer { 0 };
 	std::atomic<uint64> GNextResourceId { 1 };
 	std::atomic<uint64> GNextCausalId { 1 };
+	std::atomic<uint64> GNextContributorId { 1 };
+	std::atomic<uint64> GNextDataLayerTransitionId { 1 };
 	std::atomic<uint64> GNextDestroyedIdentity { 0 };
 	std::atomic<uint64> GThreadBufferOverflows { 0 };
 	std::atomic<uint64> GActiveIdentityOverflows { 0 };
@@ -922,6 +945,18 @@ namespace
 	std::atomic<uint64> GBindingSubmitStaleRecords { 0 };
 	std::atomic<uint64> GBindingSubmitDeduplicated { 0 };
 	std::atomic<uint64> GBindingSubmitDedupOverwrites { 0 };
+	std::atomic<uint64> GContributorDescriptorsRecorded { 0 };
+	std::atomic<uint64> GContributorDescriptorsOmitted { 0 };
+	std::atomic<uint64> GContributorDataLayerRowsRecorded { 0 };
+	std::atomic<uint64> GContributorDataLayerRowsOmitted { 0 };
+	std::atomic<uint64> GContributorsWithoutActor { 0 };
+	std::atomic<uint64> GContributorsWithoutRuntimeCell { 0 };
+	std::atomic<uint64> GBindingContributorLinksRecorded { 0 };
+	std::atomic<uint64> GDataLayerTransitionsRecorded { 0 };
+	std::atomic<uint64> GDataLayerTransitionRowsRecorded { 0 };
+	std::atomic<uint64> GDataLayerTransitionsOmitted { 0 };
+	std::atomic<uint32> GContributorDescriptorCoverageReported { 0 };
+	std::atomic<uint32> GDataLayerTransitionCoverageReported { 0 };
 
 	thread_local int32 GTlsThreadBufferIndex = -2;
 	thread_local uint32 GTlsCommandSequence = 0;
@@ -938,6 +973,30 @@ namespace
 		0,
 		TEXT("Records selected RHI command enqueue/execution and update operations. ")
 		TEXT("This is bounded but can be expensive on binding-heavy frames."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceContributors(
+		TEXT("r.RHI.ResourceProvenance.Contributors"),
+		1,
+		TEXT("Captures bounded actor, component, World Partition, and Data Layer metadata for cached MPC bindings. Requires CommandUses=1."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxContributorDescriptors(
+		TEXT("r.RHI.ResourceProvenance.MaxContributorDescriptors"),
+		65536,
+		TEXT("Maximum number of primitive contributor descriptors recorded during one process run."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxDataLayersPerContributor(
+		TEXT("r.RHI.ResourceProvenance.MaxDataLayersPerContributor"),
+		16,
+		TEXT("Maximum number of Data Layer descriptor rows recorded for one primitive contributor."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxDataLayerTransitions(
+		TEXT("r.RHI.ResourceProvenance.MaxDataLayerTransitions"),
+		65536,
+		TEXT("Maximum number of World Partition Data Layer transitions recorded during one process run."),
 		ECVF_Default);
 
 	const TCHAR* GetOperationName(EOperation Operation)
@@ -986,6 +1045,23 @@ namespace
 		case EOperation::SceneMapRemove:             return TEXT("SceneMapRemove");
 		case EOperation::SceneMapReplaceOld:         return TEXT("SceneMapReplaceOld");
 		case EOperation::SceneMapReplaceNew:         return TEXT("SceneMapReplaceNew");
+		case EOperation::ReleaseCause:               return TEXT("ReleaseCause");
+		case EOperation::ReleaseBindingSnapshot:     return TEXT("ReleaseBindingSnapshot");
+		case EOperation::ReleaseBindingCoverage:     return TEXT("ReleaseBindingCoverage");
+		case EOperation::ContributorRegistered:      return TEXT("ContributorRegistered");
+		case EOperation::ContributorActor:           return TEXT("ContributorActor");
+		case EOperation::ContributorComponent:       return TEXT("ContributorComponent");
+		case EOperation::ContributorWorldPartition:  return TEXT("ContributorWorldPartition");
+		case EOperation::ContributorDataLayer:       return TEXT("ContributorDataLayer");
+		case EOperation::ContributorRetired:         return TEXT("ContributorRetired");
+		case EOperation::BindingContributor:         return TEXT("BindingContributor");
+		case EOperation::ContributorCoverageOmitted: return TEXT("ContributorCoverageOmitted");
+		case EOperation::DataLayerStateRequest:       return TEXT("DataLayerStateRequest");
+		case EOperation::DataLayerStateRejected:      return TEXT("DataLayerStateRejected");
+		case EOperation::DataLayerTargetStateChanged: return TEXT("DataLayerTargetStateChanged");
+		case EOperation::DataLayerEffectiveStateChanged: return TEXT("DataLayerEffectiveStateChanged");
+		case EOperation::DataLayerStateNoOp:          return TEXT("DataLayerStateNoOp");
+		case EOperation::DataLayerTransitionCoverage: return TEXT("DataLayerTransitionCoverage");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -1390,6 +1466,11 @@ namespace
 		{
 			ReleaseOwner.Set(nullptr);
 		}
+		ClaimedIdentity->BindingStateOmitted = 0;
+		for (FPriorityBindingState& BindingState : ClaimedIdentity->BindingStates)
+		{
+			BindingState = {};
+		}
 		ClaimedIdentity->LastCommandOwnerKey = 0;
 		ClaimedIdentity->LastCommandOwnerCorrelation = 0;
 		ClaimedIdentity->LastCommandOwner.Set(nullptr);
@@ -1740,6 +1821,7 @@ namespace
 			TCHAR AccessOwners[PriorityAccessOwnerCount][PathCapacity] {};
 			TCHAR ReleaseOwners[PriorityReleaseOwnerCount][PathCapacity] {};
 			TCHAR LastCommandOwner[JournalTextCapacity] {};
+			FPriorityBindingState BindingStates[PriorityBindingStateCapacity] {};
 			Identity.DebugName.Get(DebugName);
 			Identity.OwnerName.Get(OwnerName);
 			Identity.OwnerPath.Get(OwnerPath);
@@ -1761,6 +1843,11 @@ namespace
 			const uint32 AccessOwnerKeyCount = Identity.AccessOwnerKeyCount;
 			const uint32 AccessOwnerOmitted = Identity.AccessOwnerOmitted;
 			const uint32 ReleaseOwnerWriteIndex = Identity.ReleaseOwnerWriteIndex;
+			const uint32 BindingStateOmitted = Identity.BindingStateOmitted;
+			for (uint32 BindingIndex = 0; BindingIndex < PriorityBindingStateCapacity; ++BindingIndex)
+			{
+				BindingStates[BindingIndex] = Identity.BindingStates[BindingIndex];
+			}
 			const uint64 LastCommandOwnerKey = Identity.LastCommandOwnerKey;
 			const uint64 LastCommandOwnerCorrelation = Identity.LastCommandOwnerCorrelation;
 			Identity.LastCommandOwner.Get(LastCommandOwner);
@@ -1844,6 +1931,33 @@ namespace
 					ReleaseOwners[OwnerSlot][0] ? ReleaseOwners[OwnerSlot] : TEXT("<missing>"));
 			}
 
+			uint32 ActiveBindingCount = 0;
+			for (const FPriorityBindingState& BindingState : BindingStates)
+			{
+				if (BindingState.BindingId == 0 || BindingState.LiveCopies == 0)
+				{
+					continue;
+				}
+				++ActiveBindingCount;
+				UE_LOG(LogRHI, Error,
+					TEXT("RHI provenance retained binding: id=%llu binding_id=%llu owner_key=0x%llx live_copies=%u invalidated=%u submitted=%u last_op=%s last_pc=0x%llx"),
+					static_cast<unsigned long long>(IdentityId),
+					static_cast<unsigned long long>(BindingState.BindingId),
+					static_cast<unsigned long long>(BindingState.OwnerKey),
+					BindingState.LiveCopies,
+					BindingState.bInvalidated ? 1u : 0u,
+					BindingState.bSubmitted ? 1u : 0u,
+					GetOperationName(BindingState.LastOperation),
+					static_cast<unsigned long long>(BindingState.LastCallerAddress));
+			}
+			UE_LOG(LogRHI, Error,
+				TEXT("RHI provenance retained binding coverage: id=%llu active=%u capacity=%u omitted=%u tracking_enabled=%u"),
+				static_cast<unsigned long long>(IdentityId),
+				ActiveBindingCount,
+				PriorityBindingStateCapacity,
+				BindingStateOmitted,
+				CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() != 0 ? 1u : 0u);
+
 			UE_LOG(LogRHI, Error,
 				TEXT("RHI provenance exact command owner: id=%llu correlation=%llu owner_key=0x%llx owner='%s'"),
 				static_cast<unsigned long long>(IdentityId),
@@ -1860,7 +1974,7 @@ namespace
 		}
 
 		UE_LOG(LogRHI, Error,
-			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu"),
+			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu contributor_descriptors=%llu contributor_descriptor_omissions=%llu contributor_without_actor=%llu contributor_without_runtime_cell=%llu contributor_datalayer_rows=%llu contributor_datalayer_omissions=%llu binding_contributor_links=%llu datalayer_transitions=%llu datalayer_transition_rows=%llu datalayer_transition_omissions=%llu"),
 			MatchCount,
 			AddressGenerationCount,
 			PriorityIdentityCapacity,
@@ -1878,7 +1992,17 @@ namespace
 			static_cast<unsigned long long>(GBindingSubmitFirstRecords.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GBindingSubmitStaleRecords.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GBindingSubmitDeduplicated.load(std::memory_order_relaxed)),
-			static_cast<unsigned long long>(GBindingSubmitDedupOverwrites.load(std::memory_order_relaxed)));
+			static_cast<unsigned long long>(GBindingSubmitDedupOverwrites.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GContributorDescriptorsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GContributorDescriptorsOmitted.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GContributorsWithoutActor.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GContributorsWithoutRuntimeCell.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GContributorDataLayerRowsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GContributorDataLayerRowsOmitted.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GBindingContributorLinksRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GDataLayerTransitionsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GDataLayerTransitionRowsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GDataLayerTransitionsOmitted.load(std::memory_order_relaxed)));
 
 		if (AddressGenerationCount > 1)
 		{
@@ -2356,6 +2480,7 @@ void Record(
 	case EOperation::GCPostCollected:
 	case EOperation::SceneMapRemove:
 	case EOperation::SceneMapReplaceOld:
+	case EOperation::ReleaseCause:
 			if (FIdentity* Identity = FindIdentity(ResourceId))
 		{
 			LockIdentity(*Identity);
@@ -2399,6 +2524,238 @@ void Record(
 			CallerAddress,
 			CorrelationId));
 	}
+}
+
+bool IsContributorCaptureEnabled()
+{
+	return CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() != 0 &&
+		CVarRHIResourceProvenanceContributors.GetValueOnAnyThread() != 0;
+}
+
+uint64 AllocateContributorId()
+{
+	if (!IsContributorCaptureEnabled())
+	{
+		return 0;
+	}
+
+	const uint64 ContributorId = GNextContributorId.fetch_add(1, std::memory_order_relaxed);
+	const uint64 MaximumDescriptors = static_cast<uint64>(FMath::Clamp(
+		CVarRHIResourceProvenanceMaxContributorDescriptors.GetValueOnAnyThread(),
+		1,
+		1048576));
+	if (ContributorId > MaximumDescriptors)
+	{
+		GContributorDescriptorsOmitted.fetch_add(1, std::memory_order_relaxed);
+		if (GContributorDescriptorCoverageReported.exchange(1, std::memory_order_acq_rel) == 0)
+		{
+			const uint32 PackedCoverage = (1u << 31) | 1u;
+			Record(
+				EOperation::ContributorCoverageOmitted,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			FJournalQueueRecord JournalRecord = MakeJournalRecord(
+				EJournalRecordKind::Marker,
+				EOperation::ContributorCoverageOmitted,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			CopyJournalText(JournalRecord, TEXT("reason=max_contributor_descriptors first_omission=1"));
+			GJournalWriter.Enqueue(JournalRecord);
+		}
+		return 0;
+	}
+
+	GContributorDescriptorsRecorded.fetch_add(1, std::memory_order_relaxed);
+	return ContributorId;
+}
+
+uint32 GetMaxContributorDataLayers()
+{
+	return static_cast<uint32>(FMath::Clamp(
+		CVarRHIResourceProvenanceMaxDataLayersPerContributor.GetValueOnAnyThread(),
+		1,
+		256));
+}
+
+void RecordContributorMetadata(
+	EOperation Operation,
+	uint64 ContributorId,
+	const void* SubjectAddress,
+	uint32 PackedValue,
+	const TCHAR* Text,
+	uint64 CallerAddress)
+{
+	if (ContributorId == 0 || !IsContributorCaptureEnabled())
+	{
+		return;
+	}
+
+	switch (Operation)
+	{
+	case EOperation::ContributorRegistered:
+	case EOperation::ContributorActor:
+	case EOperation::ContributorComponent:
+	case EOperation::ContributorWorldPartition:
+	case EOperation::ContributorDataLayer:
+	case EOperation::ContributorRetired:
+	case EOperation::ContributorCoverageOmitted:
+		break;
+	default:
+		return;
+	}
+
+	if (Operation == EOperation::ContributorRegistered && (PackedValue & 1u) != 0)
+	{
+		if ((PackedValue & (1u << 1)) == 0)
+		{
+			GContributorsWithoutActor.fetch_add(1, std::memory_order_relaxed);
+		}
+		if ((PackedValue & (1u << 2)) == 0)
+		{
+			GContributorsWithoutRuntimeCell.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
+	else if (Operation == EOperation::ContributorDataLayer)
+	{
+		GContributorDataLayerRowsRecorded.fetch_add(1, std::memory_order_relaxed);
+	}
+	else if (Operation == EOperation::ContributorCoverageOmitted)
+	{
+		GContributorDataLayerRowsOmitted.fetch_add(PackedValue, std::memory_order_relaxed);
+	}
+
+	// Descriptor operations are deliberately excluded from IsJournaledOperation so the
+	// text-bearing marker below is the only journal row. The in-memory ring receives a
+	// parallel compact record for crash-time diagnostics.
+	Record(
+		Operation,
+		SubjectAddress,
+		nullptr,
+		0,
+		0xff,
+		PackedValue,
+		CallerAddress,
+		ContributorId);
+
+	FJournalQueueRecord JournalRecord = MakeJournalRecord(
+		EJournalRecordKind::Marker,
+		Operation,
+		SubjectAddress,
+		nullptr,
+		0,
+		0xff,
+		PackedValue,
+		CallerAddress,
+		ContributorId);
+	CopyJournalText(JournalRecord, Text);
+	GJournalWriter.Enqueue(JournalRecord);
+}
+
+uint64 AllocateDataLayerTransitionId()
+{
+	if (!IsContributorCaptureEnabled())
+	{
+		return 0;
+	}
+
+	const uint64 TransitionId = GNextDataLayerTransitionId.fetch_add(1, std::memory_order_relaxed);
+	const uint64 MaximumTransitions = static_cast<uint64>(FMath::Clamp(
+		CVarRHIResourceProvenanceMaxDataLayerTransitions.GetValueOnAnyThread(),
+		1,
+		1048576));
+	if (TransitionId > MaximumTransitions)
+	{
+		GDataLayerTransitionsOmitted.fetch_add(1, std::memory_order_relaxed);
+		if (GDataLayerTransitionCoverageReported.exchange(1, std::memory_order_acq_rel) == 0)
+		{
+			const uint32 PackedCoverage = (1u << 31) | 1u;
+			Record(
+				EOperation::DataLayerTransitionCoverage,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			FJournalQueueRecord JournalRecord = MakeJournalRecord(
+				EJournalRecordKind::Marker,
+				EOperation::DataLayerTransitionCoverage,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			CopyJournalText(JournalRecord, TEXT("reason=max_data_layer_transitions first_omission=1"));
+			GJournalWriter.Enqueue(JournalRecord);
+		}
+		return 0;
+	}
+
+	GDataLayerTransitionsRecorded.fetch_add(1, std::memory_order_relaxed);
+	return TransitionId;
+}
+
+void RecordDataLayerTransition(
+	EOperation Operation,
+	uint64 TransitionId,
+	const void* SubjectAddress,
+	uint32 PackedValue,
+	const TCHAR* Text,
+	uint64 CallerAddress)
+{
+	if (TransitionId == 0 || !IsContributorCaptureEnabled())
+	{
+		return;
+	}
+
+	switch (Operation)
+	{
+	case EOperation::DataLayerStateRequest:
+	case EOperation::DataLayerStateRejected:
+	case EOperation::DataLayerTargetStateChanged:
+	case EOperation::DataLayerEffectiveStateChanged:
+	case EOperation::DataLayerStateNoOp:
+		break;
+	default:
+		return;
+	}
+
+	GDataLayerTransitionRowsRecorded.fetch_add(1, std::memory_order_relaxed);
+	Record(
+		Operation,
+		SubjectAddress,
+		nullptr,
+		0,
+		0xff,
+		PackedValue,
+		CallerAddress,
+		TransitionId);
+
+	FJournalQueueRecord JournalRecord = MakeJournalRecord(
+		EJournalRecordKind::Marker,
+		Operation,
+		SubjectAddress,
+		nullptr,
+		0,
+		0xff,
+		PackedValue,
+		CallerAddress,
+		TransitionId);
+	CopyJournalText(JournalRecord, Text);
+	GJournalWriter.Enqueue(JournalRecord);
 }
 
 uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CallerAddress)
@@ -2592,6 +2949,7 @@ void RecordBindingLifecycle(
 	const void* ResourceAddress,
 	uint64 BindingId,
 	uint64 OwnerKey,
+	uint64 ContributorId,
 	uint64 CallerAddress)
 {
 	if (CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() == 0 ||
@@ -2613,6 +2971,73 @@ void RecordBindingLifecycle(
 			ResourceType = static_cast<uint8>(Identity->ResourceType.load(std::memory_order_relaxed));
 			bResourceWasStale = IsStalePriorityState(static_cast<EOperation>(
 				Identity->LastOperation.load(std::memory_order_acquire)));
+
+			LockPriorityIdentity(*Identity);
+			if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+			{
+				FPriorityBindingState* MatchingState = nullptr;
+				FPriorityBindingState* ReusableState = nullptr;
+				for (FPriorityBindingState& BindingState : Identity->BindingStates)
+				{
+					if (BindingState.BindingId == BindingId)
+					{
+						MatchingState = &BindingState;
+						break;
+					}
+					if (!ReusableState && (BindingState.BindingId == 0 || BindingState.LiveCopies == 0))
+					{
+						ReusableState = &BindingState;
+					}
+				}
+
+				if (!MatchingState && Operation != EOperation::BindingRelease)
+				{
+					MatchingState = ReusableState;
+					if (MatchingState)
+					{
+						*MatchingState = {};
+						MatchingState->BindingId = BindingId;
+					}
+					else
+					{
+						++Identity->BindingStateOmitted;
+					}
+				}
+
+				if (MatchingState)
+				{
+					MatchingState->OwnerKey = OwnerKey != 0 ? OwnerKey : MatchingState->OwnerKey;
+					MatchingState->LastCallerAddress = CallerAddress;
+					MatchingState->LastOperation = Operation;
+					if ((Operation == EOperation::BindingMove || Operation == EOperation::BindingSubmit) &&
+						MatchingState->LiveCopies == 0)
+					{
+						// Conservative recovery if tracing was enabled after the original create.
+						MatchingState->LiveCopies = 1;
+					}
+					if (Operation == EOperation::BindingCreate)
+					{
+						MatchingState->LiveCopies = 1;
+					}
+					else if (Operation == EOperation::BindingCopy)
+					{
+						++MatchingState->LiveCopies;
+					}
+					else if (Operation == EOperation::BindingRelease && MatchingState->LiveCopies > 0)
+					{
+						--MatchingState->LiveCopies;
+					}
+					if (Operation == EOperation::BindingInvalidate)
+					{
+						MatchingState->bInvalidated = true;
+					}
+					if (Operation == EOperation::BindingSubmit)
+					{
+						MatchingState->bSubmitted = true;
+					}
+				}
+			}
+			UnlockPriorityIdentity(*Identity);
 		}
 	}
 
@@ -2667,6 +3092,95 @@ void RecordBindingLifecycle(
 			OwnerKey,
 			BindingId);
 	}
+
+	// ContributorId is immutable metadata captured on the game thread. Keep it on a
+	// separate row so the operation-site PC remains intact on the lifecycle record.
+	if (ContributorId != 0 &&
+		(Operation == EOperation::BindingCreate || Operation == EOperation::BindingSubmit))
+	{
+		GBindingContributorLinksRecorded.fetch_add(1, std::memory_order_relaxed);
+		Record(
+			EOperation::BindingContributor,
+			ResourceAddress,
+			reinterpret_cast<const void*>(FlagsAddress),
+			ResourceId,
+			ResourceType,
+			0,
+			ContributorId,
+			BindingId);
+	}
+}
+
+void RecordReleaseCause(
+	EReleaseCause Cause,
+	uint64 ResourceId,
+	const void* ResourceAddress,
+	const void* FlagsAddress,
+	uint8 ResourceType,
+	uint64 CallerAddress)
+{
+	Record(
+		EOperation::ReleaseCause,
+		ResourceAddress,
+		FlagsAddress,
+		ResourceId,
+		ResourceType,
+		static_cast<uint32>(Cause),
+		CallerAddress);
+
+	FPriorityBindingState ActiveBindings[PriorityBindingStateCapacity] {};
+	uint32 ActiveBindingCount = 0;
+	uint32 OmittedBindingCount = 0;
+	if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
+	{
+		LockPriorityIdentity(*Identity);
+		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+		{
+			OmittedBindingCount = Identity->BindingStateOmitted;
+			for (const FPriorityBindingState& BindingState : Identity->BindingStates)
+			{
+				if (BindingState.BindingId != 0 && BindingState.LiveCopies > 0)
+				{
+					ActiveBindings[ActiveBindingCount++] = BindingState;
+				}
+			}
+		}
+		UnlockPriorityIdentity(*Identity);
+	}
+
+	for (uint32 BindingIndex = 0; BindingIndex < ActiveBindingCount; ++BindingIndex)
+	{
+		const FPriorityBindingState& BindingState = ActiveBindings[BindingIndex];
+		const uint32 PackedValue =
+			static_cast<uint32>(Cause) |
+			(static_cast<uint32>(BindingState.LastOperation) << 8) |
+			(FMath::Min(BindingState.LiveCopies, 0xffu) << 16) |
+			(BindingState.bInvalidated ? (1u << 24) : 0u) |
+			(BindingState.bSubmitted ? (1u << 25) : 0u);
+		Record(
+			EOperation::ReleaseBindingSnapshot,
+			ResourceAddress,
+			FlagsAddress,
+			ResourceId,
+			ResourceType,
+			PackedValue,
+			BindingState.LastCallerAddress,
+			BindingState.BindingId);
+	}
+
+	const bool bBindingTrackingEnabled = CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() != 0;
+	const uint32 CoverageValue =
+		FMath::Min(ActiveBindingCount, 0x7fffu) |
+		(FMath::Min(OmittedBindingCount, 0xffffu) << 15) |
+		(bBindingTrackingEnabled ? (1u << 31) : 0u);
+	Record(
+		EOperation::ReleaseBindingCoverage,
+		ResourceAddress,
+		FlagsAddress,
+		ResourceId,
+		ResourceType,
+		CoverageValue,
+		CallerAddress);
 }
 
 uint64 AllocateCausalId()

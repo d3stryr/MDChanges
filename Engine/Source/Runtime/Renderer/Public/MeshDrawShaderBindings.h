@@ -59,8 +59,9 @@ public:
 			+ ParameterMapInfo.SRVs.Num());
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 		// Diagnostic sidecars are deliberately not RHI references.  They preserve the
-		// owner and exact resource generation after the cached raw pointer becomes stale.
-		DataSize += sizeof(uint64) * ParameterMapInfo.UniformBuffers.Num() * 2;
+		// owner, exact resource generation, and immutable primitive contributor identity
+		// after the cached raw pointer becomes stale.
+		DataSize += sizeof(uint64) * ParameterMapInfo.UniformBuffers.Num() * 3;
 #endif
 
 		// Allocate a bit for each SRV tracking whether it is a FRHITexture* or FRHIShaderResourceView*
@@ -86,6 +87,7 @@ protected:
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 		Offset += ParameterMapInfo.UniformBuffers.Num() * sizeof(uint64);
 		Offset += ParameterMapInfo.UniformBuffers.Num() * sizeof(uint64);
+		Offset += ParameterMapInfo.UniformBuffers.Num() * sizeof(uint64);
 #endif
 		return Offset;
 	}
@@ -99,6 +101,12 @@ protected:
 	inline uint32 GetProvenanceResourceIdOffset() const
 	{
 		return GetProvenanceOwnerOffset()
+			+ ParameterMapInfo.UniformBuffers.Num() * sizeof(uint64);
+	}
+
+	inline uint32 GetProvenanceContributorIdOffset() const
+	{
+		return GetProvenanceResourceIdOffset()
 			+ ParameterMapInfo.UniformBuffers.Num() * sizeof(uint64);
 	}
 #endif
@@ -179,7 +187,8 @@ public:
 		const FShaderUniformBufferParameter& Parameter,
 		const FRHIUniformBuffer* Value,
 		uint64 OwnerKey,
-		uint64 ResourceId)
+		uint64 ResourceId,
+		uint64 ContributorId)
 	{
 		checkfSlow(Parameter.IsInitialized(), TEXT("Parameter was not serialized"));
 
@@ -192,6 +201,7 @@ public:
 			WriteBindingUniformBuffer(Value, Parameter.GetBaseIndex());
 			WriteProvenanceOwnerKey(OwnerKey, Parameter.GetBaseIndex());
 			WriteProvenanceResourceId(ResourceId, Parameter.GetBaseIndex());
+			WriteProvenanceContributorId(ContributorId, Parameter.GetBaseIndex());
 		}
 	}
 #endif
@@ -306,6 +316,11 @@ private:
 	{
 		return reinterpret_cast<uint64*>(Data + GetProvenanceResourceIdOffset());
 	}
+
+	inline uint64* GetProvenanceContributorIdStart() const
+	{
+		return reinterpret_cast<uint64*>(Data + GetProvenanceContributorIdOffset());
+	}
 #endif
 
 	inline FRHISamplerState** GetSamplerStart() const
@@ -397,6 +412,17 @@ private:
 		}
 
 		checkfSlow(FoundIndex >= 0, TEXT("Attempted to set a provenance resource id for a uniform buffer at BaseIndex %u which was never in the shader's parameter map."), BaseIndex);
+	}
+
+	inline void WriteProvenanceContributorId(uint64 ContributorId, uint32 BaseIndex)
+	{
+		const int32 FoundIndex = FindSortedArrayBaseIndex(MakeArrayView(ParameterMapInfo.UniformBuffers), BaseIndex);
+		if (FoundIndex >= 0)
+		{
+			GetProvenanceContributorIdStart()[FoundIndex] = ContributorId;
+		}
+
+		checkfSlow(FoundIndex >= 0, TEXT("Attempted to set a provenance contributor id for a uniform buffer at BaseIndex %u which was never in the shader's parameter map."), BaseIndex);
 	}
 #endif
 

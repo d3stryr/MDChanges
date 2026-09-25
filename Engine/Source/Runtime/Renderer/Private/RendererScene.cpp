@@ -832,6 +832,9 @@ void FScene::UpdateParameterCollections(const TArray<FMaterialParameterCollectio
 			FRHIUniformBuffer* NextUniformBuffer = MatchingResource ? MatchingResource->GetUniformBuffer() : nullptr;
 			if (PreviousUniformBuffer && !MatchingResource)
 			{
+				PreviousUniformBuffer->RecordProvenanceReleaseCause(
+					UE::RHI::ResourceProvenance::EReleaseCause::SceneMapRemove,
+					UE::RHI::ResourceProvenance::CaptureCallerAddress());
 				PreviousUniformBuffer->RecordProvenanceEvent(
 					UE::RHI::ResourceProvenance::EOperation::SceneMapRemove,
 					PackCollectionIndexAndCount(PreviousCollectionIndex, ParameterCollections.Num()),
@@ -842,6 +845,9 @@ void FScene::UpdateParameterCollections(const TArray<FMaterialParameterCollectio
 			}
 			else if (PreviousUniformBuffer && PreviousUniformBuffer != NextUniformBuffer)
 			{
+				PreviousUniformBuffer->RecordProvenanceReleaseCause(
+					UE::RHI::ResourceProvenance::EReleaseCause::SceneMapReplace,
+					UE::RHI::ResourceProvenance::CaptureCallerAddress());
 				PreviousUniformBuffer->RecordProvenanceEvent(
 					UE::RHI::ResourceProvenance::EOperation::SceneMapReplaceOld,
 					PackCollectionIndexAndCount(PreviousCollectionIndex, ParameterCollections.Num()),

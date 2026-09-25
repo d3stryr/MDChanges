@@ -76,6 +76,50 @@ OPERATION_NAMES = {
     39: "SceneMapRemove",
     40: "SceneMapReplaceOld",
     41: "SceneMapReplaceNew",
+    42: "ReleaseCause",
+    43: "ReleaseBindingSnapshot",
+    44: "ReleaseBindingCoverage",
+    45: "ContributorRegistered",
+    46: "ContributorActor",
+    47: "ContributorComponent",
+    48: "ContributorWorldPartition",
+    49: "ContributorDataLayer",
+    50: "ContributorRetired",
+    51: "BindingContributor",
+    52: "ContributorCoverageOmitted",
+    53: "DataLayerStateRequest",
+    54: "DataLayerStateRejected",
+    55: "DataLayerTargetStateChanged",
+    56: "DataLayerEffectiveStateChanged",
+    57: "DataLayerStateNoOp",
+    58: "DataLayerTransitionCoverage",
+}
+
+DATA_LAYER_STATE_NAMES = {
+    0: "Unloaded",
+    1: "Loaded",
+    2: "Activated",
+}
+
+DATA_LAYER_REJECTION_NAMES = {
+    0: "NotRuntime",
+    1: "ClientOnlyFromServer",
+    2: "ServerOnlyFromClient",
+    3: "AuthoritativeFromClient",
+}
+
+RELEASE_CAUSE_NAMES = {
+    0: "Unknown",
+    1: "MPCAssetBeginDestroy",
+    2: "MPCAssetFinishDestroy",
+    3: "MPCInstanceFinishDestroy",
+    4: "MPCGameThreadDestroy",
+    5: "MPCUniformBufferRecreate",
+    6: "MPCUniformBufferInvalidReplacement",
+    7: "WorldReplacedMPCInstance",
+    8: "WorldPostGCInvalidCollection",
+    9: "SceneMapRemove",
+    10: "SceneMapReplace",
 }
 
 GC_STATE_FLAGS = (
@@ -309,6 +353,86 @@ def decode_packed_detail(record: Record) -> str:
             f"collection_index={record.packed_value & 0xffff},"
             f"collection_count={(record.packed_value >> 16) & 0xffff}"
         )
+    if record.operation == 42:
+        cause = record.packed_value & 0xff
+        return f"release_cause={RELEASE_CAUSE_NAMES.get(cause, f'Unknown({cause})')}"
+    if record.operation == 43:
+        cause = record.packed_value & 0xff
+        last_operation = (record.packed_value >> 8) & 0xff
+        live_copies = (record.packed_value >> 16) & 0xff
+        flags = []
+        if record.packed_value & (1 << 24):
+            flags.append("invalidated")
+        if record.packed_value & (1 << 25):
+            flags.append("submitted")
+        flag_text = ",".join(flags) if flags else "none"
+        return (
+            f"release_cause={RELEASE_CAUSE_NAMES.get(cause, f'Unknown({cause})')},"
+            f"binding_last_operation={OPERATION_NAMES.get(last_operation, f'Unknown({last_operation})')},"
+            f"live_copies={live_copies},binding_flags={flag_text}"
+        )
+    if record.operation == 44:
+        active_bindings = record.packed_value & 0x7fff
+        omitted_bindings = (record.packed_value >> 15) & 0xffff
+        tracking_enabled = bool(record.packed_value & (1 << 31))
+        return (
+            f"active_bindings={active_bindings},"
+            f"omitted_bindings={omitted_bindings},"
+            f"binding_tracking_enabled={str(tracking_enabled).lower()}"
+        )
+    if record.operation == 45:
+        return (
+            f"metadata_captured={str(bool(record.packed_value & 1)).lower()},"
+            f"has_actor={str(bool(record.packed_value & (1 << 1))).lower()},"
+            f"has_runtime_cell={str(bool(record.packed_value & (1 << 2))).lower()}"
+        )
+    if record.operation == 46:
+        return (
+            f"actor_data_layers={record.packed_value & 0xffff},"
+            f"spatially_loaded={str(bool(record.packed_value & (1 << 16))).lower()},"
+            f"has_runtime_cell={str(bool(record.packed_value & (1 << 17))).lower()}"
+        )
+    if record.operation == 48:
+        return f"cell_data_layers={record.packed_value & 0xffff}"
+    if record.operation == 49:
+        return (
+            f"data_layer_index={record.packed_value & 0xffff},"
+            f"data_layer_count={(record.packed_value >> 16) & 0xffff}"
+        )
+    if record.operation == 52:
+        if record.packed_value & (1 << 31):
+            return (
+                "omitted_contributor_descriptors="
+                f"{record.packed_value & 0x7fffffff}"
+            )
+        return f"omitted_data_layers={record.packed_value}"
+    if 53 <= record.operation <= 57:
+        old_target = record.packed_value & 0x3
+        new_target = (record.packed_value >> 2) & 0x3
+        old_effective = (record.packed_value >> 4) & 0x3
+        new_effective = (record.packed_value >> 6) & 0x3
+        detail = (
+            f"target={DATA_LAYER_STATE_NAMES.get(old_target, f'Unknown({old_target})')}"
+            f"->{DATA_LAYER_STATE_NAMES.get(new_target, f'Unknown({new_target})')},"
+            f"effective={DATA_LAYER_STATE_NAMES.get(old_effective, f'Unknown({old_effective})')}"
+            f"->{DATA_LAYER_STATE_NAMES.get(new_effective, f'Unknown({new_effective})')},"
+            f"recursive={str(bool(record.packed_value & (1 << 8))).lower()},"
+            f"client_only={str(bool(record.packed_value & (1 << 9))).lower()},"
+            f"server_only={str(bool(record.packed_value & (1 << 10))).lower()},"
+            f"net_mode={(record.packed_value >> 11) & 0x7}"
+        )
+        if record.operation == 54:
+            reason = (record.packed_value >> 16) & 0xf
+            detail += (
+                ",rejection="
+                f"{DATA_LAYER_REJECTION_NAMES.get(reason, f'Unknown({reason})')}"
+            )
+        return detail
+    if record.operation == 58:
+        return (
+            "omitted_data_layer_transitions="
+            f"{record.packed_value & 0x7fffffff}"
+        )
     return ""
 
 
@@ -320,6 +444,9 @@ def record_matches(
     text_contains: Optional[str],
     causal_id: Optional[int],
     scene_refresh_id: Optional[int],
+    binding_id: Optional[int],
+    contributor_id: Optional[int],
+    data_layer_transition_id: Optional[int],
 ) -> bool:
     if resource_id is not None and record.resource_id != resource_id:
         return False
@@ -344,6 +471,31 @@ def record_matches(
             record.correlation_id if 38 <= record.operation <= 41 else 0
         )
         if record_scene_refresh_id != scene_refresh_id:
+            return False
+    if binding_id is not None:
+        record_binding_id = (
+            record.correlation_id
+            if 23 <= record.operation <= 29
+            or record.operation in (43, 51)
+            else 0
+        )
+        if record_binding_id != binding_id:
+            return False
+    if contributor_id is not None:
+        record_contributor_id = (
+            record.caller_address
+            if record.operation == 51
+            else record.correlation_id
+            if 45 <= record.operation <= 50 or record.operation == 52
+            else 0
+        )
+        if record_contributor_id != contributor_id:
+            return False
+    if data_layer_transition_id is not None:
+        record_transition_id = (
+            record.correlation_id if 53 <= record.operation <= 57 else 0
+        )
+        if record_transition_id != data_layer_transition_id:
             return False
     return True
 
@@ -371,6 +523,24 @@ def main() -> int:
         type=parse_integer,
         dest="scene_refresh_id",
         help="Emit scene MPC-map mutations sharing one refresh correlation id.",
+    )
+    parser.add_argument(
+        "--binding",
+        type=parse_integer,
+        dest="binding_id",
+        help="Emit cached-binding lifecycle, release snapshot, and contributor-link rows for one binding id.",
+    )
+    parser.add_argument(
+        "--contributor",
+        type=parse_integer,
+        dest="contributor_id",
+        help="Emit primitive contributor metadata and cached-binding links for one contributor id.",
+    )
+    parser.add_argument(
+        "--data-layer-transition",
+        type=parse_integer,
+        dest="data_layer_transition_id",
+        help="Emit request, outcome, and effective-state rows for one Data Layer transition id.",
     )
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
@@ -402,7 +572,8 @@ def main() -> int:
                 "seconds\tcycles\tkind\toperation\tid\tresource\tflags_address"
                 "\ttype\ttype_name\tthread\tpacked\tcaller\tcorrelation"
                 "\tbinding_id\tcausal_id\tparent_correlation"
-                "\tscene_refresh_id\towner_key\trecord_flags\tdetail\ttext",
+                "\tscene_refresh_id\tcontributor_id\tdata_layer_transition_id"
+                "\towner_key\trecord_flags\tdetail\ttext",
                 file=output_stream,
             )
 
@@ -416,6 +587,9 @@ def main() -> int:
                     args.text_contains,
                     args.causal_id,
                     args.scene_refresh_id,
+                    args.binding_id,
+                    args.contributor_id,
+                    args.data_layer_transition_id,
                 ):
                     continue
 
@@ -434,6 +608,19 @@ def main() -> int:
                 binding_id = (
                     record.correlation_id
                     if 23 <= record.operation <= 29
+                    or record.operation in (43, 51)
+                    else 0
+                )
+                contributor_id = (
+                    record.caller_address
+                    if record.operation == 51
+                    else record.correlation_id
+                    if 45 <= record.operation <= 50 or record.operation == 52
+                    else 0
+                )
+                data_layer_transition_id = (
+                    record.correlation_id
+                    if 53 <= record.operation <= 57
                     else 0
                 )
                 causal_id = 0
@@ -471,6 +658,8 @@ def main() -> int:
                     str(causal_id),
                     str(parent_correlation),
                     str(scene_refresh_id),
+                    str(contributor_id),
+                    str(data_layer_transition_id),
                     f"0x{owner_key:x}",
                     f"0x{record.flags:04x}",
                     decode_packed_detail(record),

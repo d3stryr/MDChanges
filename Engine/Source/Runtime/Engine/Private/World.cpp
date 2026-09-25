@@ -2070,6 +2070,9 @@ UMaterialParameterCollectionInstance* UWorld::CreateParameterCollectionInstance(
 		{
 			if (FMaterialParameterCollectionInstanceResource* PreviousResource = PreviousInstance->GetResource())
 			{
+				PreviousResource->GameThread_RecordProvenanceReleaseCause(
+					UE::RHI::ResourceProvenance::EReleaseCause::WorldReplacedMPCInstance,
+					UE::RHI::ResourceProvenance::CaptureCallerAddress());
 				PreviousResource->GameThread_RecordProvenanceReleaseOwner(FString::Printf(
 					TEXT("cause=WorldReplacedMPCInstance world=%s old_instance=%s collection=%s"),
 					*GetPathName(),
@@ -2198,6 +2201,9 @@ void UWorld::OnPostGC()
 			UMaterialParameterCollectionInstance* InvalidInstance = ParameterCollectionInstances[InstanceIndex];
 			if (FMaterialParameterCollectionInstanceResource* InvalidResource = InvalidInstance->GetResource())
 			{
+				InvalidResource->GameThread_RecordProvenanceReleaseCause(
+					UE::RHI::ResourceProvenance::EReleaseCause::WorldPostGCInvalidCollection,
+					UE::RHI::ResourceProvenance::CaptureCallerAddress());
 				InvalidResource->GameThread_RecordProvenanceReleaseOwner(FString::Printf(
 					TEXT("cause=WorldPostGCInvalidCollection world=%s instance=%s index=%d"),
 					*GetPathName(),

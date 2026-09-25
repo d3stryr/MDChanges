@@ -263,6 +263,7 @@ struct FMaterialParameterCollectionAccessProvenance
 {
 	uint64 OwnerKey = 0;
 	uint64 ResourceId = 0;
+	uint64 ContributorId = 0;
 };
 
 static FMaterialParameterCollectionAccessProvenance RecordMaterialParameterCollectionAccessOwner(
@@ -327,7 +328,11 @@ static FMaterialParameterCollectionAccessProvenance RecordMaterialParameterColle
 			UE::RHI::ResourceProvenance::CaptureCallerAddress());
 	}
 
-	return { OwnerKey, ResourceId };
+	return {
+		OwnerKey,
+		ResourceId,
+		PrimitiveSceneProxy ? PrimitiveSceneProxy->GetProvenanceContributorId() : 0
+	};
 }
 #endif
 
@@ -492,7 +497,8 @@ void FMaterialShader::GetShaderBindings(
 				ParameterCollectionUniformBuffers[CollectionIndex],
 				UniformBuffer,
 				AccessProvenance.OwnerKey,
-				AccessProvenance.ResourceId);
+				AccessProvenance.ResourceId,
+				AccessProvenance.ContributorId);
 #else
 			ShaderBindings.Add(ParameterCollectionUniformBuffers[CollectionIndex], UniformBuffer);
 #endif

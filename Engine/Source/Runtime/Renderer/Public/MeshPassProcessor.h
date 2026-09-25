@@ -1257,6 +1257,11 @@ public:
 	{
 		return reinterpret_cast<const uint64*>(Data + GetProvenanceResourceIdOffset());
 	}
+
+	const uint64* GetProvenanceContributorIdStart() const
+	{
+		return reinterpret_cast<const uint64*>(Data + GetProvenanceContributorIdOffset());
+	}
 #endif
 
 private:

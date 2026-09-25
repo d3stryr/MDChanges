@@ -187,6 +187,19 @@ public:
 			InOwner);
 	}
 
+	inline void RecordProvenanceReleaseCause(
+		UE::RHI::ResourceProvenance::EReleaseCause Cause,
+		uint64 CallerAddress) const
+	{
+		UE::RHI::ResourceProvenance::RecordReleaseCause(
+			Cause,
+			ProvenanceId,
+			this,
+			&AtomicFlags,
+			static_cast<uint8>(ResourceType),
+			CallerAddress);
+	}
+
 	inline void RecordProvenanceEvent(
 		UE::RHI::ResourceProvenance::EOperation Operation,
 		uint32 PackedValue,
