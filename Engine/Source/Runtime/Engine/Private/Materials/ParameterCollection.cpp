@@ -1235,15 +1235,44 @@ void FMaterialParameterCollectionInstanceResource::GameThread_UpdateContents(con
 	}
 
 	FMaterialParameterCollectionInstanceResource* Resource = this;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	const uint64 ProvenanceCausalId = UE::RHI::ResourceProvenance::AllocateCausalId();
+	UE::RHI::ResourceProvenance::RecordCausalPhase(
+		UE::RHI::ResourceProvenance::EOperation::CausalRequest,
+		ProvenanceCausalId,
+		Resource,
+		bRecreateUniformBuffer ? 1u : 0u,
+		UE::RHI::ResourceProvenance::CaptureCallerAddress());
+#endif
 	ENQUEUE_RENDER_COMMAND(UpdateCollectionCommand)(
-		[InGuid, Data, InOwnerName, Resource, bRecreateUniformBuffer](FRHICommandListImmediate& RHICmdList)
+		[InGuid, Data, InOwnerName, Resource, bRecreateUniformBuffer
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+			, ProvenanceCausalId
+#endif
+		](FRHICommandListImmediate& RHICmdList)
 		{
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+			UE::RHI::ResourceProvenance::RecordCausalPhase(
+				UE::RHI::ResourceProvenance::EOperation::CausalExecute,
+				ProvenanceCausalId,
+				Resource,
+				bRecreateUniformBuffer ? 1u : 0u,
+				UE::RHI::ResourceProvenance::CaptureCallerAddress());
+#endif
 			if (bRecreateUniformBuffer)
 			{
 				// Async RDG tasks can call FMaterialShader::SetParameters which touch material parameter collections.
 				FRDGBuilder::WaitForAsyncExecuteTask();
 			}
-			Resource->UpdateContents(InGuid, Data, InOwnerName, bRecreateUniformBuffer);
+			Resource->UpdateContents(
+				InGuid,
+				Data,
+				InOwnerName,
+				bRecreateUniformBuffer
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+				, ProvenanceCausalId
+#endif
+			);
 		}
 	);
 }
@@ -1282,7 +1311,15 @@ FMaterialParameterCollectionInstanceResource::~FMaterialParameterCollectionInsta
 	check(!UniformBuffer.IsValid());
 }
 
-void FMaterialParameterCollectionInstanceResource::UpdateContents(const FGuid& InId, const TArray<FVector4f>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer)
+void FMaterialParameterCollectionInstanceResource::UpdateContents(
+	const FGuid& InId,
+	const TArray<FVector4f>& Data,
+	const FName& InOwnerName,
+	bool bRecreateUniformBuffer
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	, uint64 ProvenanceCausalId
+#endif
+)
 {
 	Id = InId;
 	OwnerName = InOwnerName;
@@ -1296,7 +1333,13 @@ void FMaterialParameterCollectionInstanceResource::UpdateContents(const FGuid& I
 		{
 			check(NewSize == UniformBufferLayout->ConstantBufferSize);
 			check(UniformBuffer->GetLayoutPtr() == UniformBufferLayout);
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+			const uint64 PreviousCausalParent = UE::RHI::ResourceProvenance::SetCurrentCausalParent(ProvenanceCausalId);
+#endif
 			FRHICommandListImmediate::Get().UpdateUniformBuffer(UniformBuffer, Data.GetData());
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+			UE::RHI::ResourceProvenance::SetCurrentCausalParent(PreviousCausalParent);
+#endif
 		}
 		else
 		{
@@ -1334,6 +1377,10 @@ void FMaterialParameterCollectionInstanceResource::UpdateContents(const FGuid& I
 				{
 					UniformBuffer->SetProvenanceOwnerPath(*ProvenanceCollectionPath);
 				}
+				UE::RHI::ResourceProvenance::RecordResourceCausalLink(
+					UniformBuffer.GetReference(),
+					ProvenanceCausalId,
+					UE::RHI::ResourceProvenance::CaptureCallerAddress());
 			}
 #endif
 		}
