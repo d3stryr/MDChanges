@@ -777,22 +777,101 @@ uint32 FScene::GetShareOriginViewKey(const FSceneViewState& ViewState)
 
 void FScene::UpdateParameterCollections(const TArray<FMaterialParameterCollectionInstanceResource*>& InParameterCollections)
 {
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	const uint64 ProvenanceSceneRefreshId = UE::RHI::ResourceProvenance::AllocateTimelineId();
+#endif
 	ENQUEUE_RENDER_COMMAND(UpdateParameterCollectionsCommand)(
-		[this, InParameterCollections] (FRHICommandListBase&)
+		[this, InParameterCollections
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+			, ProvenanceSceneRefreshId
+#endif
+		] (FRHICommandListBase&)
 	{
 		// Async RDG tasks can call FMaterialShader::SetParameters which touch material parameter collections.
 		FRDGBuilder::WaitForAsyncExecuteTask();
 
-		// Empty the scene's map so any unused uniform buffers will be released
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-		for (const TPair<FGuid, FUniformBufferRHIRef>& ParameterCollection : ParameterCollections)
+		auto PackCollectionIndexAndCount = [](int32 CollectionIndex, int32 CollectionCount)
 		{
-			if (ParameterCollection.Value.IsValid())
+			const uint32 PackedIndex = static_cast<uint32>(FMath::Clamp(CollectionIndex, 0, 0xffff));
+			const uint32 PackedCount = static_cast<uint32>(FMath::Clamp(CollectionCount, 0, 0xffff));
+			return PackedIndex | (PackedCount << 16);
+		};
+
+		for (int32 CollectionIndex = 0; CollectionIndex < InParameterCollections.Num(); ++CollectionIndex)
+		{
+			FMaterialParameterCollectionInstanceResource* InstanceResource = InParameterCollections[CollectionIndex];
+			FRHIUniformBuffer* NextUniformBuffer = InstanceResource ? InstanceResource->GetUniformBuffer() : nullptr;
+			if (NextUniformBuffer && !ParameterCollections.Contains(InstanceResource->GetId()))
 			{
-				ParameterCollection.Value->RecordProvenanceReleaseOwner(TEXT("cause=SceneParameterCollectionMapRefresh"));
+				NextUniformBuffer->RecordProvenanceEvent(
+					UE::RHI::ResourceProvenance::EOperation::SceneMapInsert,
+					PackCollectionIndexAndCount(CollectionIndex, InParameterCollections.Num()),
+					UE::RHI::ResourceProvenance::CaptureCallerAddress(),
+					ProvenanceSceneRefreshId);
 			}
 		}
+
+		int32 PreviousCollectionIndex = 0;
+		for (const TPair<FGuid, FUniformBufferRHIRef>& ParameterCollection : ParameterCollections)
+		{
+			FMaterialParameterCollectionInstanceResource* MatchingResource = nullptr;
+			int32 MatchingCollectionIndex = INDEX_NONE;
+			for (int32 CollectionIndex = 0; CollectionIndex < InParameterCollections.Num(); ++CollectionIndex)
+			{
+				FMaterialParameterCollectionInstanceResource* CandidateResource = InParameterCollections[CollectionIndex];
+				if (CandidateResource && CandidateResource->GetId() == ParameterCollection.Key)
+				{
+					MatchingResource = CandidateResource;
+					MatchingCollectionIndex = CollectionIndex;
+					break;
+				}
+			}
+
+			FRHIUniformBuffer* PreviousUniformBuffer = ParameterCollection.Value.GetReference();
+			FRHIUniformBuffer* NextUniformBuffer = MatchingResource ? MatchingResource->GetUniformBuffer() : nullptr;
+			if (PreviousUniformBuffer && !MatchingResource)
+			{
+				PreviousUniformBuffer->RecordProvenanceEvent(
+					UE::RHI::ResourceProvenance::EOperation::SceneMapRemove,
+					PackCollectionIndexAndCount(PreviousCollectionIndex, ParameterCollections.Num()),
+					UE::RHI::ResourceProvenance::CaptureCallerAddress(),
+					ProvenanceSceneRefreshId);
+				PreviousUniformBuffer->RecordProvenanceReleaseOwner(
+					TEXT("cause=SceneParameterCollectionMapRemove"));
+			}
+			else if (PreviousUniformBuffer && PreviousUniformBuffer != NextUniformBuffer)
+			{
+				PreviousUniformBuffer->RecordProvenanceEvent(
+					UE::RHI::ResourceProvenance::EOperation::SceneMapReplaceOld,
+					PackCollectionIndexAndCount(PreviousCollectionIndex, ParameterCollections.Num()),
+					UE::RHI::ResourceProvenance::CaptureCallerAddress(),
+					ProvenanceSceneRefreshId);
+				PreviousUniformBuffer->RecordProvenanceReleaseOwner(
+					TEXT("cause=SceneParameterCollectionMapReplace"));
+				if (NextUniformBuffer)
+				{
+					NextUniformBuffer->RecordProvenanceEvent(
+						UE::RHI::ResourceProvenance::EOperation::SceneMapReplaceNew,
+						PackCollectionIndexAndCount(MatchingCollectionIndex, InParameterCollections.Num()),
+						UE::RHI::ResourceProvenance::CaptureCallerAddress(),
+						ProvenanceSceneRefreshId);
+				}
+			}
+			else if (!PreviousUniformBuffer && NextUniformBuffer)
+			{
+				NextUniformBuffer->RecordProvenanceEvent(
+					UE::RHI::ResourceProvenance::EOperation::SceneMapReplaceNew,
+					PackCollectionIndexAndCount(MatchingCollectionIndex, InParameterCollections.Num()),
+					UE::RHI::ResourceProvenance::CaptureCallerAddress(),
+					ProvenanceSceneRefreshId);
+			}
+
+			++PreviousCollectionIndex;
+		}
 #endif
+
+		// Empty the scene's map so any unused uniform buffers will be released.
 		ParameterCollections.Empty();
 
 		// Add each existing parameter collection id and its uniform buffer

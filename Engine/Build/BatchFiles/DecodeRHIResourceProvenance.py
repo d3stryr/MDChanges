@@ -68,7 +68,30 @@ OPERATION_NAMES = {
     31: "CausalExecute",
     32: "CausalLink",
     33: "CausalResource",
+    34: "GCPreSnapshot",
+    35: "GCPostSurvived",
+    36: "GCPostCollected",
+    37: "GCCoverageOmitted",
+    38: "SceneMapInsert",
+    39: "SceneMapRemove",
+    40: "SceneMapReplaceOld",
+    41: "SceneMapReplaceNew",
 }
+
+GC_STATE_FLAGS = (
+    (0, "collection_valid"),
+    (1, "collection_rooted"),
+    (2, "collection_standalone"),
+    (3, "collection_public"),
+    (4, "collection_transient"),
+    (5, "collection_begin_destroyed"),
+    (6, "collection_finish_destroyed"),
+    (7, "instance_rooted"),
+    (8, "partitioned_world"),
+    (9, "runtime_cell_world"),
+    (10, "game_world"),
+    (11, "instance_begin_destroyed"),
+)
 
 RESOURCE_TYPE_NAMES = {
     0: "RRT_None",
@@ -270,6 +293,25 @@ def sanitize_tsv(value: str) -> str:
     return value.replace("\t", " ").replace("\r", " ").replace("\n", " ")
 
 
+def decode_packed_detail(record: Record) -> str:
+    if record.operation in (34, 35, 36):
+        enabled = [
+            name for bit, name in GC_STATE_FLAGS
+            if record.packed_value & (1 << bit)
+        ]
+        if not (record.packed_value & 1):
+            enabled.insert(0, "collection_invalid")
+        return ",".join(enabled)
+    if record.operation == 37:
+        return f"omitted_instances={record.packed_value}"
+    if 38 <= record.operation <= 41:
+        return (
+            f"collection_index={record.packed_value & 0xffff},"
+            f"collection_count={(record.packed_value >> 16) & 0xffff}"
+        )
+    return ""
+
+
 def record_matches(
     record: Record,
     resource_id: Optional[int],
@@ -277,6 +319,7 @@ def record_matches(
     flags_address: Optional[int],
     text_contains: Optional[str],
     causal_id: Optional[int],
+    scene_refresh_id: Optional[int],
 ) -> bool:
     if resource_id is not None and record.resource_id != resource_id:
         return False
@@ -295,6 +338,12 @@ def record_matches(
             else 0
         )
         if record_causal_id != causal_id:
+            return False
+    if scene_refresh_id is not None:
+        record_scene_refresh_id = (
+            record.correlation_id if 38 <= record.operation <= 41 else 0
+        )
+        if record_scene_refresh_id != scene_refresh_id:
             return False
     return True
 
@@ -316,6 +365,12 @@ def main() -> int:
         dest="text_contains",
         help="Only emit records whose text contains this value (case-insensitive). "
         "Use this to discover an MPC generation id from its owner path, then decode by --id.",
+    )
+    parser.add_argument(
+        "--scene-refresh",
+        type=parse_integer,
+        dest="scene_refresh_id",
+        help="Emit scene MPC-map mutations sharing one refresh correlation id.",
     )
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
@@ -347,7 +402,7 @@ def main() -> int:
                 "seconds\tcycles\tkind\toperation\tid\tresource\tflags_address"
                 "\ttype\ttype_name\tthread\tpacked\tcaller\tcorrelation"
                 "\tbinding_id\tcausal_id\tparent_correlation"
-                "\towner_key\trecord_flags\ttext",
+                "\tscene_refresh_id\towner_key\trecord_flags\tdetail\ttext",
                 file=output_stream,
             )
 
@@ -360,6 +415,7 @@ def main() -> int:
                     args.flags_address,
                     args.text_contains,
                     args.causal_id,
+                    args.scene_refresh_id,
                 ):
                     continue
 
@@ -386,38 +442,41 @@ def main() -> int:
                     causal_id = record.correlation_id
                 elif record.operation == 32:
                     causal_id = record.caller_address
-                    parent_correlation = record.caller_address
-                print(
-                    "{:.9f}\t{}\t{}\t{}\t{}\t0x{:x}\t0x{:x}\t{}\t{}"
-                    "\t{}\t0x{:08x}\t0x{:x}\t{}\t{}\t{}\t{}"
-                    "\t0x{:x}\t0x{:04x}\t{}".format(
-                        seconds,
-                        record.cycles,
-                        KIND_NAMES.get(record.kind, f"Unknown({record.kind})"),
-                        OPERATION_NAMES.get(
-                            record.operation, f"Unknown({record.operation})"
-                        ),
-                        record.resource_id,
-                        record.resource_address,
-                        record.flags_address,
-                        record.resource_type,
-                        RESOURCE_TYPE_NAMES.get(
-                            record.resource_type,
-                            f"Unknown({record.resource_type})",
-                        ),
-                        record.thread_id,
-                        record.packed_value,
-                        record.caller_address,
-                        record.correlation_id,
-                        binding_id,
-                        causal_id,
-                        parent_correlation,
-                        owner_key,
-                        record.flags,
-                        sanitize_tsv(record.text),
-                    ),
-                    file=output_stream,
+                    parent_correlation = record.correlation_id
+                scene_refresh_id = (
+                    record.correlation_id
+                    if 38 <= record.operation <= 41
+                    else 0
                 )
+                fields = [
+                    f"{seconds:.9f}",
+                    str(record.cycles),
+                    KIND_NAMES.get(record.kind, f"Unknown({record.kind})"),
+                    OPERATION_NAMES.get(
+                        record.operation, f"Unknown({record.operation})"
+                    ),
+                    str(record.resource_id),
+                    f"0x{record.resource_address:x}",
+                    f"0x{record.flags_address:x}",
+                    str(record.resource_type),
+                    RESOURCE_TYPE_NAMES.get(
+                        record.resource_type,
+                        f"Unknown({record.resource_type})",
+                    ),
+                    str(record.thread_id),
+                    f"0x{record.packed_value:08x}",
+                    f"0x{record.caller_address:x}",
+                    str(record.correlation_id),
+                    str(binding_id),
+                    str(causal_id),
+                    str(parent_correlation),
+                    str(scene_refresh_id),
+                    f"0x{owner_key:x}",
+                    f"0x{record.flags:04x}",
+                    decode_packed_detail(record),
+                    sanitize_tsv(record.text),
+                ]
+                print("\t".join(fields), file=output_stream)
     finally:
         if args.output:
             output_stream.close()

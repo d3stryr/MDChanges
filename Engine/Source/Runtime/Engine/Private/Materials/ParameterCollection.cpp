@@ -1225,6 +1225,33 @@ void FMaterialParameterCollectionInstanceResource::GameThread_RecordProvenanceRe
 		}
 	);
 }
+
+void FMaterialParameterCollectionInstanceResource::GameThread_RecordProvenanceEvent(
+	UE::RHI::ResourceProvenance::EOperation Operation,
+	uint32 PackedValue,
+	uint64 CallerAddress,
+	uint64 CorrelationId)
+{
+	if (UNLIKELY(!FApp::CanEverRender()))
+	{
+		return;
+	}
+
+	FMaterialParameterCollectionInstanceResource* Resource = this;
+	ENQUEUE_RENDER_COMMAND(RecordCollectionProvenanceEventCommand)(
+		[Resource, Operation, PackedValue, CallerAddress, CorrelationId](FRHICommandListImmediate&)
+		{
+			if (Resource->UniformBuffer.IsValid())
+			{
+				Resource->UniformBuffer->RecordProvenanceEvent(
+					Operation,
+					PackedValue,
+					CallerAddress,
+					CorrelationId);
+			}
+		}
+	);
+}
 #endif
 
 void FMaterialParameterCollectionInstanceResource::GameThread_UpdateContents(const FGuid& InGuid, const TArray<FVector4f>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer)

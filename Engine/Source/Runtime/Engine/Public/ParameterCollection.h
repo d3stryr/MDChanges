@@ -38,6 +38,13 @@ public:
 
 	/** Publish a copied higher-level reason for why this owner is about to relinquish the resource. */
 	void GameThread_RecordProvenanceReleaseOwner(FString InReleaseOwner);
+
+	/** Queue a compact fixed-size lifecycle event without copying or formatting strings. */
+	void GameThread_RecordProvenanceEvent(
+		UE::RHI::ResourceProvenance::EOperation Operation,
+		uint32 PackedValue,
+		uint64 CallerAddress,
+		uint64 CorrelationId = 0);
 #endif
 
 	/** Destroy, called from the game thread. */

@@ -51,7 +51,15 @@ namespace UE::RHI::ResourceProvenance
 		CausalRequest,
 		CausalExecute,
 		CausalLink,
-		CausalResource
+		CausalResource,
+		GCPreSnapshot,
+		GCPostSurvived,
+		GCPostCollected,
+		GCCoverageOmitted,
+		SceneMapInsert,
+		SceneMapRemove,
+		SceneMapReplaceOld,
+		SceneMapReplaceNew
 	};
 
 	FORCEINLINE uint64 CaptureCallerAddress()
@@ -123,6 +131,9 @@ namespace UE::RHI::ResourceProvenance
 		uint64 BindingId,
 		uint64 OwnerKey,
 		uint64 CallerAddress);
+
+	/** Allocates an always-on correlation id for diagnostic timelines. */
+	RHI_API uint64 AllocateTimelineId();
 
 	/** Allocates and records bounded cross-thread causal tokens when command-use tracing is enabled. */
 	RHI_API uint64 AllocateCausalId();

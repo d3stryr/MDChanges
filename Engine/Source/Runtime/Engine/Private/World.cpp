@@ -308,6 +308,15 @@ static TAutoConsoleVariable<int32> CVarPurgeEditorSceneDuringPIE(
 	TEXT("0 to keep editor scene fully initialized during PIE (default)\n")
 	TEXT("1 to purge editor scene from memory during PIE and restore when the session finishes."));
 
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+static TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxMPCGCInstancesPerWorld(
+	TEXT("r.RHI.ResourceProvenance.MaxMPCGCInstancesPerWorld"),
+	256,
+	TEXT("Maximum MPC instance resources recorded per world in each pre/post-GC phase. ")
+	TEXT("The recorder emits GCCoverageOmitted when additional instances are skipped."),
+	ECVF_Default);
+#endif
+
 static int32 GGroupedComponentMovementBufferSize = 20;
 static FAutoConsoleVariableRef CVarGroupedComponentMovementBufferSize(
 	TEXT("s.GroupedComponentMovement.BufferSize"),
@@ -1766,6 +1775,9 @@ void UWorld::PostLoad()
 	if (!bIsThePostGCDelegateRegistered)
 	{
 		bIsThePostGCDelegateRegistered = true;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		FCoreUObjectDelegates::GetPreGarbageCollectDelegate().AddUObject(this, &UWorld::OnPreGC);
+#endif
 		FCoreUObjectDelegates::GetPostGarbageCollect().AddUObject(this, &UWorld::OnPostGC);
 	}
 
@@ -1898,6 +1910,69 @@ UWorld* UWorld::GetWorld() const
 	return const_cast<UWorld*>(this);
 }
 
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+namespace
+{
+	constexpr uint32 MPCGC_CollectionValid = 1u << 0;
+	constexpr uint32 MPCGC_CollectionRooted = 1u << 1;
+	constexpr uint32 MPCGC_CollectionStandalone = 1u << 2;
+	constexpr uint32 MPCGC_CollectionPublic = 1u << 3;
+	constexpr uint32 MPCGC_CollectionTransient = 1u << 4;
+	constexpr uint32 MPCGC_CollectionBeginDestroyed = 1u << 5;
+	constexpr uint32 MPCGC_CollectionFinishDestroyed = 1u << 6;
+	constexpr uint32 MPCGC_InstanceRooted = 1u << 7;
+	constexpr uint32 MPCGC_PartitionedWorld = 1u << 8;
+	constexpr uint32 MPCGC_RuntimeCellWorld = 1u << 9;
+	constexpr uint32 MPCGC_GameWorld = 1u << 10;
+	constexpr uint32 MPCGC_InstanceBeginDestroyed = 1u << 11;
+
+	uint32 BuildMPCGCProvenanceState(
+		const UWorld* World,
+		const UMaterialParameterCollectionInstance* Instance)
+	{
+		uint32 State = 0;
+		const UMaterialParameterCollection* Collection = Instance ? Instance->GetCollection() : nullptr;
+
+		if (Collection)
+		{
+			State |= MPCGC_CollectionValid;
+			if (Collection->IsRooted()) State |= MPCGC_CollectionRooted;
+			if (Collection->HasAnyFlags(RF_Standalone)) State |= MPCGC_CollectionStandalone;
+			if (Collection->HasAnyFlags(RF_Public)) State |= MPCGC_CollectionPublic;
+			if (Collection->HasAnyFlags(RF_Transient)) State |= MPCGC_CollectionTransient;
+			if (Collection->HasAnyFlags(RF_BeginDestroyed)) State |= MPCGC_CollectionBeginDestroyed;
+			if (Collection->HasAnyFlags(RF_FinishDestroyed)) State |= MPCGC_CollectionFinishDestroyed;
+		}
+
+		if (Instance)
+		{
+			if (Instance->IsRooted()) State |= MPCGC_InstanceRooted;
+			if (Instance->HasAnyFlags(RF_BeginDestroyed)) State |= MPCGC_InstanceBeginDestroyed;
+		}
+
+		if (World)
+		{
+			if (World->IsPartitionedWorld()) State |= MPCGC_PartitionedWorld;
+			if (World->IsGameWorld()) State |= MPCGC_GameWorld;
+			if (World->PersistentLevel && World->PersistentLevel->IsWorldPartitionRuntimeCell())
+			{
+				State |= MPCGC_RuntimeCellWorld;
+			}
+		}
+
+		return State;
+	}
+
+	int32 GetMPCGCProvenanceLimit()
+	{
+		return FMath::Clamp(
+			CVarRHIResourceProvenanceMaxMPCGCInstancesPerWorld.GetValueOnGameThread(),
+			1,
+			4096);
+	}
+}
+#endif
+
 void UWorld::SetupParameterCollectionInstances()
 {
 	ULevel* Level = PersistentLevel;
@@ -2027,8 +2102,93 @@ UMaterialParameterCollectionInstance* UWorld::CreateParameterCollectionInstance(
 }
 
 
+void UWorld::OnPreGC()
+{
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	const int32 RecordLimit = GetMPCGCProvenanceLimit();
+	const uint64 CallerAddress = UE::RHI::ResourceProvenance::CaptureCallerAddress();
+	int32 RecordedCount = 0;
+	FMaterialParameterCollectionInstanceResource* FirstRecordedResource = nullptr;
+
+	for (UMaterialParameterCollectionInstance* Instance : ParameterCollectionInstances)
+	{
+		if (RecordedCount >= RecordLimit || !Instance)
+		{
+			continue;
+		}
+
+		if (FMaterialParameterCollectionInstanceResource* Resource = Instance->GetResource())
+		{
+			Resource->GameThread_RecordProvenanceEvent(
+				UE::RHI::ResourceProvenance::EOperation::GCPreSnapshot,
+				BuildMPCGCProvenanceState(this, Instance),
+				CallerAddress);
+			FirstRecordedResource = FirstRecordedResource ? FirstRecordedResource : Resource;
+			++RecordedCount;
+		}
+	}
+
+	const int32 OmittedCount = ParameterCollectionInstances.Num() - RecordedCount;
+	if (OmittedCount > 0 && FirstRecordedResource)
+	{
+		FirstRecordedResource->GameThread_RecordProvenanceEvent(
+			UE::RHI::ResourceProvenance::EOperation::GCCoverageOmitted,
+			static_cast<uint32>(OmittedCount),
+			CallerAddress);
+	}
+#endif
+}
+
 void UWorld::OnPostGC()
 {
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	const int32 RecordLimit = GetMPCGCProvenanceLimit();
+	const uint64 CallerAddress = UE::RHI::ResourceProvenance::CaptureCallerAddress();
+	int32 RecordedCount = 0;
+	FMaterialParameterCollectionInstanceResource* FirstRecordedResource = nullptr;
+
+	// Record invalid collections first so the bounded phase never spends its budget on
+	// survivors while omitting the collection transition that caused a removal.
+	for (int32 Pass = 0; Pass < 2; ++Pass)
+	{
+		const bool bRecordValidCollections = Pass == 1;
+		for (UMaterialParameterCollectionInstance* Instance : ParameterCollectionInstances)
+		{
+			if (RecordedCount >= RecordLimit || !Instance)
+			{
+				continue;
+			}
+
+			const bool bCollectionValid = Instance->IsCollectionValid();
+			if (bCollectionValid != bRecordValidCollections)
+			{
+				continue;
+			}
+
+			if (FMaterialParameterCollectionInstanceResource* Resource = Instance->GetResource())
+			{
+				Resource->GameThread_RecordProvenanceEvent(
+					bCollectionValid
+						? UE::RHI::ResourceProvenance::EOperation::GCPostSurvived
+						: UE::RHI::ResourceProvenance::EOperation::GCPostCollected,
+					BuildMPCGCProvenanceState(this, Instance),
+					CallerAddress);
+				FirstRecordedResource = FirstRecordedResource ? FirstRecordedResource : Resource;
+				++RecordedCount;
+			}
+		}
+	}
+
+	const int32 OmittedCount = ParameterCollectionInstances.Num() - RecordedCount;
+	if (OmittedCount > 0 && FirstRecordedResource)
+	{
+		FirstRecordedResource->GameThread_RecordProvenanceEvent(
+			UE::RHI::ResourceProvenance::EOperation::GCCoverageOmitted,
+			static_cast<uint32>(OmittedCount),
+			CallerAddress);
+	}
+#endif
+
 	bool bRemovedSomething = false;
 	for (int32 InstanceIndex = ParameterCollectionInstances.Num()-1; InstanceIndex >= 0; InstanceIndex--)
 	{
@@ -2469,6 +2629,9 @@ void UWorld::InitWorld(const InitializationValues IVS)
 	if (!bIsThePostGCDelegateRegistered)
 	{
 		bIsThePostGCDelegateRegistered = true;
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		FCoreUObjectDelegates::GetPreGarbageCollectDelegate().AddUObject(this, &UWorld::OnPreGC);
+#endif
 		FCoreUObjectDelegates::GetPostGarbageCollect().AddUObject(this, &UWorld::OnPostGC);
 	}
 

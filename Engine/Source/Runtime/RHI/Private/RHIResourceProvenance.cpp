@@ -843,6 +843,14 @@ namespace
 		case EOperation::CausalExecute:
 		case EOperation::CausalLink:
 		case EOperation::CausalResource:
+		case EOperation::GCPreSnapshot:
+		case EOperation::GCPostSurvived:
+		case EOperation::GCPostCollected:
+		case EOperation::GCCoverageOmitted:
+		case EOperation::SceneMapInsert:
+		case EOperation::SceneMapRemove:
+		case EOperation::SceneMapReplaceOld:
+		case EOperation::SceneMapReplaceNew:
 			return true;
 		default:
 			return false;
@@ -872,6 +880,10 @@ namespace
 		case EOperation::CausalExecute:
 		case EOperation::CausalLink:
 		case EOperation::CausalResource:
+		case EOperation::SceneMapInsert:
+		case EOperation::SceneMapRemove:
+		case EOperation::SceneMapReplaceOld:
+		case EOperation::SceneMapReplaceNew:
 			return EJournalRecordKind::CommandUse;
 		default:
 			return EJournalRecordKind::Lifecycle;
@@ -966,6 +978,14 @@ namespace
 		case EOperation::CausalExecute:             return TEXT("CausalExecute");
 		case EOperation::CausalLink:                return TEXT("CausalLink");
 		case EOperation::CausalResource:            return TEXT("CausalResource");
+		case EOperation::GCPreSnapshot:             return TEXT("GCPreSnapshot");
+		case EOperation::GCPostSurvived:            return TEXT("GCPostSurvived");
+		case EOperation::GCPostCollected:           return TEXT("GCPostCollected");
+		case EOperation::GCCoverageOmitted:          return TEXT("GCCoverageOmitted");
+		case EOperation::SceneMapInsert:             return TEXT("SceneMapInsert");
+		case EOperation::SceneMapRemove:             return TEXT("SceneMapRemove");
+		case EOperation::SceneMapReplaceOld:         return TEXT("SceneMapReplaceOld");
+		case EOperation::SceneMapReplaceNew:         return TEXT("SceneMapReplaceNew");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -2333,6 +2353,9 @@ void Record(
 	case EOperation::DeleteCancelled:
 	case EOperation::DestructorBegin:
 	case EOperation::PhysicalFree:
+	case EOperation::GCPostCollected:
+	case EOperation::SceneMapRemove:
+	case EOperation::SceneMapReplaceOld:
 			if (FIdentity* Identity = FindIdentity(ResourceId))
 		{
 			LockIdentity(*Identity);
@@ -2652,6 +2675,11 @@ uint64 AllocateCausalId()
 	{
 		return 0;
 	}
+	return AllocateTimelineId();
+}
+
+uint64 AllocateTimelineId()
+{
 	return GNextCausalId.fetch_add(1, std::memory_order_relaxed);
 }
 

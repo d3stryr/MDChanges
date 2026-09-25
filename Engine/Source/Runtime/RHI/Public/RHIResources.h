@@ -186,6 +186,23 @@ public:
 			static_cast<uint8>(ResourceType),
 			InOwner);
 	}
+
+	inline void RecordProvenanceEvent(
+		UE::RHI::ResourceProvenance::EOperation Operation,
+		uint32 PackedValue,
+		uint64 CallerAddress,
+		uint64 CorrelationId = 0) const
+	{
+		UE::RHI::ResourceProvenance::Record(
+			Operation,
+			this,
+			&AtomicFlags,
+			ProvenanceId,
+			static_cast<uint8>(ResourceType),
+			PackedValue,
+			CallerAddress,
+			CorrelationId);
+	}
 #endif
 
 #if RHI_ENABLE_RESOURCE_INFO
