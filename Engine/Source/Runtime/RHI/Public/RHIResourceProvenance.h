@@ -83,7 +83,12 @@ namespace UE::RHI::ResourceProvenance
 		CellStateProgress,
 		CellStateCompleted,
 		CellTransitionSuperseded,
-		CellTransitionCoverage
+		CellTransitionCoverage,
+		PrimitiveTeardownBegin,
+		PrimitiveTeardownCacheRemove,
+		PrimitiveTeardownBinding,
+		PrimitiveTeardownEnd,
+		PrimitiveTeardownCoverage
 	};
 
 	enum class EReleaseCause : uint8
@@ -229,6 +234,22 @@ namespace UE::RHI::ResourceProvenance
 		uint32 PackedValue,
 		const TCHAR* Text,
 		uint64 CallerAddress);
+
+	/** Allocates one bounded primitive teardown correlation id. */
+	RHI_API uint64 AllocatePrimitiveTeardownId();
+
+	/** Records a fixed-size primitive teardown or binding-bridge row. */
+	RHI_API void RecordPrimitiveTeardown(
+		EOperation Operation,
+		uint64 TeardownId,
+		uint64 ContributorId,
+		const void* SubjectAddress,
+		uint32 PackedValue,
+		uint64 RelatedId);
+
+	/** Stages the active primitive teardown on the render thread; returns the previous id. */
+	RHI_API uint64 SetCurrentPrimitiveTeardownId(uint64 TeardownId);
+	RHI_API uint64 GetCurrentPrimitiveTeardownId();
 
 	/** Allocates an always-on correlation id for diagnostic timelines. */
 	RHI_API uint64 AllocateTimelineId();

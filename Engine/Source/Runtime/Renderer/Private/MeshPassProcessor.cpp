@@ -636,6 +636,10 @@ void FMeshDrawShaderBindings::RecordProvenanceLifecycle(
 		return;
 	}
 
+	const uint64 PrimitiveTeardownId = UE::RHI::ResourceProvenance::GetCurrentPrimitiveTeardownId();
+	const bool bBridgePrimitiveTeardown = PrimitiveTeardownId != 0 &&
+		(Operation == UE::RHI::ResourceProvenance::EOperation::BindingInvalidate ||
+		 Operation == UE::RHI::ResourceProvenance::EOperation::BindingRelease);
 	const uint8* ShaderBindingDataPtr = GetData();
 	for (int32 ShaderBindingsIndex = 0; ShaderBindingsIndex < ShaderLayouts.Num(); ++ShaderBindingsIndex)
 	{
@@ -660,6 +664,16 @@ void FMeshDrawShaderBindings::RecordProvenanceLifecycle(
 					OwnerKeys[UniformBufferIndex],
 					ContributorIds[UniformBufferIndex],
 					CallerAddress);
+				if (bBridgePrimitiveTeardown)
+				{
+					UE::RHI::ResourceProvenance::RecordPrimitiveTeardown(
+						UE::RHI::ResourceProvenance::EOperation::PrimitiveTeardownBinding,
+						PrimitiveTeardownId,
+						ContributorIds[UniformBufferIndex],
+						UniformBuffers[UniformBufferIndex],
+						static_cast<uint32>(Operation),
+						ProvenanceBindingId);
+				}
 			}
 		}
 

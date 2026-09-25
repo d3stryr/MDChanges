@@ -100,6 +100,11 @@ OPERATION_NAMES = {
     63: "CellStateCompleted",
     64: "CellTransitionSuperseded",
     65: "CellTransitionCoverage",
+    66: "PrimitiveTeardownBegin",
+    67: "PrimitiveTeardownCacheRemove",
+    68: "PrimitiveTeardownBinding",
+    69: "PrimitiveTeardownEnd",
+    70: "PrimitiveTeardownCoverage",
 }
 
 DATA_LAYER_STATE_NAMES = {
@@ -500,6 +505,33 @@ def decode_packed_detail(record: Record) -> str:
             "omitted_cell_transitions="
             f"{record.packed_value & 0x7fffffff}"
         )
+    if record.operation == 66:
+        return (
+            "reason=RemovedPrimitive,"
+            f"cached_commands={record.packed_value & 0xffff},"
+            f"static_meshes={(record.packed_value >> 16) & 0xffff}"
+        )
+    if record.operation == 67:
+        return (
+            f"cached_commands={record.packed_value & 0xffff},"
+            f"mesh_relevances={(record.packed_value >> 16) & 0xffff}"
+        )
+    if record.operation == 68:
+        binding_operation = record.packed_value & 0xff
+        return (
+            "binding_operation="
+            f"{OPERATION_NAMES.get(binding_operation, f'Unknown({binding_operation})')}"
+        )
+    if record.operation == 69:
+        return (
+            f"remaining_cached_commands={record.packed_value & 0xffff},"
+            f"remaining_static_meshes={(record.packed_value >> 16) & 0xffff}"
+        )
+    if record.operation == 70:
+        return (
+            "omitted_primitive_teardowns="
+            f"{record.packed_value & 0x7fffffff}"
+        )
     return ""
 
 
@@ -515,6 +547,7 @@ def record_matches(
     contributor_id: Optional[int],
     data_layer_transition_id: Optional[int],
     cell_transition_id: Optional[int],
+    primitive_teardown_id: Optional[int],
 ) -> bool:
     if resource_id is not None and record.resource_id != resource_id:
         return False
@@ -542,7 +575,9 @@ def record_matches(
             return False
     if binding_id is not None:
         record_binding_id = (
-            record.correlation_id
+            record.caller_address
+            if record.operation == 68
+            else record.correlation_id
             if 23 <= record.operation <= 29
             or record.operation in (43, 51)
             else 0
@@ -551,7 +586,9 @@ def record_matches(
             return False
     if contributor_id is not None:
         record_contributor_id = (
-            record.caller_address
+            record.resource_id
+            if 66 <= record.operation <= 69
+            else record.caller_address
             if record.operation == 51
             else record.correlation_id
             if 45 <= record.operation <= 50 or record.operation == 52
@@ -570,6 +607,12 @@ def record_matches(
             record.correlation_id if 59 <= record.operation <= 64 else 0
         )
         if record_transition_id != cell_transition_id:
+            return False
+    if primitive_teardown_id is not None:
+        record_teardown_id = (
+            record.correlation_id if 66 <= record.operation <= 69 else 0
+        )
+        if record_teardown_id != primitive_teardown_id:
             return False
     return True
 
@@ -622,6 +665,12 @@ def main() -> int:
         dest="cell_transition_id",
         help="Emit request, progress, completion, and supersession rows for one runtime-cell transition id.",
     )
+    parser.add_argument(
+        "--primitive-teardown",
+        type=parse_integer,
+        dest="primitive_teardown_id",
+        help="Emit primitive removal, cache removal, and binding invalidation/release bridge rows for one teardown id.",
+    )
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
 
@@ -653,7 +702,8 @@ def main() -> int:
                 "\ttype\ttype_name\tthread\tpacked\tcaller\tcorrelation"
                 "\tbinding_id\tcausal_id\tparent_correlation"
                 "\tscene_refresh_id\tcontributor_id\tdata_layer_transition_id"
-                "\tcell_transition_id\towner_key\trecord_flags\tdetail\ttext",
+                "\tcell_transition_id\tprimitive_teardown_id"
+                "\towner_key\trecord_flags\tdetail\ttext",
                 file=output_stream,
             )
 
@@ -671,6 +721,7 @@ def main() -> int:
                     args.contributor_id,
                     args.data_layer_transition_id,
                     args.cell_transition_id,
+                    args.primitive_teardown_id,
                 ):
                     continue
 
@@ -687,13 +738,17 @@ def main() -> int:
                 elif record.operation == 28:  # BindingOwner stores its key as caller.
                     owner_key = record.caller_address
                 binding_id = (
-                    record.correlation_id
+                    record.caller_address
+                    if record.operation == 68
+                    else record.correlation_id
                     if 23 <= record.operation <= 29
                     or record.operation in (43, 51)
                     else 0
                 )
                 contributor_id = (
-                    record.caller_address
+                    record.resource_id
+                    if 66 <= record.operation <= 69
+                    else record.caller_address
                     if record.operation == 51
                     else record.correlation_id
                     if 45 <= record.operation <= 50 or record.operation == 52
@@ -707,6 +762,11 @@ def main() -> int:
                 cell_transition_id = (
                     record.correlation_id
                     if 59 <= record.operation <= 64
+                    else 0
+                )
+                primitive_teardown_id = (
+                    record.correlation_id
+                    if 66 <= record.operation <= 69
                     else 0
                 )
                 causal_id = 0
@@ -747,6 +807,7 @@ def main() -> int:
                     str(contributor_id),
                     str(data_layer_transition_id),
                     str(cell_transition_id),
+                    str(primitive_teardown_id),
                     f"0x{owner_key:x}",
                     f"0x{record.flags:04x}",
                     decode_packed_detail(record),

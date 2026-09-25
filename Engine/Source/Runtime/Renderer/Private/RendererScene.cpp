@@ -19,6 +19,7 @@
 #include "EngineGlobals.h"
 #include "Components/ActorComponent.h"
 #include "RHI.h"
+#include "RHIResourceProvenance.h"
 #include "RenderingThread.h"
 #include "RenderResource.h"
 #include "UniformBuffer.h"
@@ -5919,7 +5920,41 @@ void FScene::Update(FRDGBuilder& GraphBuilder, const FUpdateParameters& Paramete
 				PrimitiveSceneInfo->FlushRuntimeVirtualTexture();
 
 				// Remove the primitive from the scene.
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+				const uint64 ProvenanceContributorId = SceneProxy->GetProvenanceContributorId();
+				const uint64 ProvenanceTeardownId = ProvenanceContributorId != 0
+					? UE::RHI::ResourceProvenance::AllocatePrimitiveTeardownId()
+					: 0;
+				if (ProvenanceTeardownId != 0)
+				{
+					const uint32 PackedCounts =
+						static_cast<uint32>(FMath::Min(PrimitiveSceneInfo->StaticMeshCommandInfos.Num(), 65535)) |
+						(static_cast<uint32>(FMath::Min(PrimitiveSceneInfo->StaticMeshes.Num(), 65535)) << 16);
+					UE::RHI::ResourceProvenance::RecordPrimitiveTeardown(
+						UE::RHI::ResourceProvenance::EOperation::PrimitiveTeardownBegin,
+						ProvenanceTeardownId,
+						ProvenanceContributorId,
+						PrimitiveSceneInfo,
+						PackedCounts,
+						UE::RHI::ResourceProvenance::CaptureCallerAddress());
+				}
+				PrimitiveSceneInfo->RemoveFromScene(true, ProvenanceTeardownId);
+				if (ProvenanceTeardownId != 0)
+				{
+					const uint32 PackedCounts =
+						static_cast<uint32>(FMath::Min(PrimitiveSceneInfo->StaticMeshCommandInfos.Num(), 65535)) |
+						(static_cast<uint32>(FMath::Min(PrimitiveSceneInfo->StaticMeshes.Num(), 65535)) << 16);
+					UE::RHI::ResourceProvenance::RecordPrimitiveTeardown(
+						UE::RHI::ResourceProvenance::EOperation::PrimitiveTeardownEnd,
+						ProvenanceTeardownId,
+						ProvenanceContributorId,
+						PrimitiveSceneInfo,
+						PackedCounts,
+						UE::RHI::ResourceProvenance::CaptureCallerAddress());
+				}
+#else
 				PrimitiveSceneInfo->RemoveFromScene(true);
+#endif
 
 				PrimitiveSceneInfo->FreeGPUSceneInstances();
 

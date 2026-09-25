@@ -789,7 +789,7 @@ void FPrimitiveSceneInfo::CacheMeshDrawCommands(FScene* Scene, TArrayView<FPrimi
 	}
 }
 
-void FPrimitiveSceneInfo::RemoveCachedMeshDrawCommands()
+void FPrimitiveSceneInfo::RemoveCachedMeshDrawCommands(uint64 ProvenanceTeardownId)
 {
 	checkSlow(IsInRenderingThread());
 
@@ -797,6 +797,20 @@ void FPrimitiveSceneInfo::RemoveCachedMeshDrawCommands()
 	// Capture the requester before cached command storage begins disappearing.
 	// Binding records use retained generation ids and never dereference an RHI object.
 	const uint64 ProvenanceInvalidationCaller = UE::RHI::ResourceProvenance::CaptureCallerAddress();
+	const uint64 PreviousPrimitiveTeardownId = UE::RHI::ResourceProvenance::SetCurrentPrimitiveTeardownId(ProvenanceTeardownId);
+	if (ProvenanceTeardownId != 0)
+	{
+		const uint32 PackedCounts =
+			static_cast<uint32>(FMath::Min(StaticMeshCommandInfos.Num(), 65535)) |
+			(static_cast<uint32>(FMath::Min(StaticMeshRelevances.Num(), 65535)) << 16);
+		UE::RHI::ResourceProvenance::RecordPrimitiveTeardown(
+			UE::RHI::ResourceProvenance::EOperation::PrimitiveTeardownCacheRemove,
+			ProvenanceTeardownId,
+			Proxy->GetProvenanceContributorId(),
+			this,
+			PackedCounts,
+			ProvenanceInvalidationCaller);
+	}
 #endif
 
 	for (int32 CommandIndex = 0; CommandIndex < StaticMeshCommandInfos.Num(); ++CommandIndex)
@@ -851,6 +865,9 @@ void FPrimitiveSceneInfo::RemoveCachedMeshDrawCommands()
 	}
 
 	StaticMeshCommandInfos.Empty();
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+	UE::RHI::ResourceProvenance::SetCurrentPrimitiveTeardownId(PreviousPrimitiveTeardownId);
+#endif
 }
 
 static void BuildNaniteMaterialBins(FScene* Scene, FPrimitiveSceneInfo* PrimitiveSceneInfo, bool bLumenEnabled, FNaniteMaterialListContext& MaterialListContext);
@@ -2037,7 +2054,7 @@ void FPrimitiveSceneInfo::AddToScene(FScene* Scene, TArrayView<FPrimitiveSceneIn
 #endif // UE_WITH_PSO_PRECACHING
 }
 
-void FPrimitiveSceneInfo::RemoveStaticMeshes()
+void FPrimitiveSceneInfo::RemoveStaticMeshes(uint64 ProvenanceTeardownId)
 {
 	// Deallocate potential OIT dynamic index buffer
 	if (OIT::IsSortedTrianglesEnabled(GMaxRHIShaderPlatform))
@@ -2055,14 +2072,14 @@ void FPrimitiveSceneInfo::RemoveStaticMeshes()
 	// Remove static meshes from the scene.
 	StaticMeshes.Empty();
 	StaticMeshRelevances.Empty();
-	RemoveCachedMeshDrawCommands();
+	RemoveCachedMeshDrawCommands(ProvenanceTeardownId);
 	RemoveCachedNaniteMaterialBins();
 #if RHI_RAYTRACING
 	RemoveCachedRayTracingPrimitives();
 #endif
 }
 
-void FPrimitiveSceneInfo::RemoveFromScene(bool bUpdateStaticDrawLists)
+void FPrimitiveSceneInfo::RemoveFromScene(bool bUpdateStaticDrawLists, uint64 ProvenanceTeardownId)
 {
 	check(IsInRenderingThread());
 
@@ -2111,7 +2128,7 @@ void FPrimitiveSceneInfo::RemoveFromScene(bool bUpdateStaticDrawLists)
 		// can't delete it unless we also update cached mesh command.
 		IndirectLightingCacheUniformBuffer.SafeRelease();
 
-		RemoveStaticMeshes();
+		RemoveStaticMeshes(ProvenanceTeardownId);
 	}
 
 	if (bRegisteredLightmapVirtualTextureProducerCallback)

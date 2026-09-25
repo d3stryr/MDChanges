@@ -926,6 +926,7 @@ namespace
 	std::atomic<uint64> GNextContributorId { 1 };
 	std::atomic<uint64> GNextDataLayerTransitionId { 1 };
 	std::atomic<uint64> GNextCellTransitionId { 1 };
+	std::atomic<uint64> GNextPrimitiveTeardownId { 1 };
 	std::atomic<uint64> GNextDestroyedIdentity { 0 };
 	std::atomic<uint64> GThreadBufferOverflows { 0 };
 	std::atomic<uint64> GActiveIdentityOverflows { 0 };
@@ -959,9 +960,13 @@ namespace
 	std::atomic<uint64> GCellTransitionsRecorded { 0 };
 	std::atomic<uint64> GCellTransitionRowsRecorded { 0 };
 	std::atomic<uint64> GCellTransitionsOmitted { 0 };
+	std::atomic<uint64> GPrimitiveTeardownsRecorded { 0 };
+	std::atomic<uint64> GPrimitiveTeardownRowsRecorded { 0 };
+	std::atomic<uint64> GPrimitiveTeardownsOmitted { 0 };
 	std::atomic<uint32> GContributorDescriptorCoverageReported { 0 };
 	std::atomic<uint32> GDataLayerTransitionCoverageReported { 0 };
 	std::atomic<uint32> GCellTransitionCoverageReported { 0 };
+	std::atomic<uint32> GPrimitiveTeardownCoverageReported { 0 };
 
 	thread_local int32 GTlsThreadBufferIndex = -2;
 	thread_local uint32 GTlsCommandSequence = 0;
@@ -971,6 +976,7 @@ namespace
 	thread_local uint64 GTlsLastExecuteOwnerLabelId = 0;
 	thread_local uint64 GTlsCurrentCausalParent = 0;
 	thread_local uint32 GTlsStagedAccessOwnerCount = 0;
+	thread_local uint64 GTlsPrimitiveTeardownId = 0;
 	thread_local FStagedAccessOwner GTlsStagedAccessOwners[StagedAccessOwnerCapacity];
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceCommandUses(
@@ -1008,6 +1014,12 @@ namespace
 		TEXT("r.RHI.ResourceProvenance.MaxCellTransitions"),
 		65536,
 		TEXT("Maximum number of World Partition runtime-cell transitions recorded during one process run."),
+		ECVF_Default);
+
+	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceMaxPrimitiveTeardowns(
+		TEXT("r.RHI.ResourceProvenance.MaxPrimitiveTeardowns"),
+		65536,
+		TEXT("Maximum number of primitive teardown correlations recorded during one process run."),
 		ECVF_Default);
 
 	const TCHAR* GetOperationName(EOperation Operation)
@@ -1080,6 +1092,11 @@ namespace
 		case EOperation::CellStateCompleted:         return TEXT("CellStateCompleted");
 		case EOperation::CellTransitionSuperseded:   return TEXT("CellTransitionSuperseded");
 		case EOperation::CellTransitionCoverage:     return TEXT("CellTransitionCoverage");
+		case EOperation::PrimitiveTeardownBegin:     return TEXT("PrimitiveTeardownBegin");
+		case EOperation::PrimitiveTeardownCacheRemove: return TEXT("PrimitiveTeardownCacheRemove");
+		case EOperation::PrimitiveTeardownBinding:   return TEXT("PrimitiveTeardownBinding");
+		case EOperation::PrimitiveTeardownEnd:       return TEXT("PrimitiveTeardownEnd");
+		case EOperation::PrimitiveTeardownCoverage:  return TEXT("PrimitiveTeardownCoverage");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -1992,7 +2009,7 @@ namespace
 		}
 
 		UE_LOG(LogRHI, Error,
-			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu contributor_descriptors=%llu contributor_descriptor_omissions=%llu contributor_without_actor=%llu contributor_without_runtime_cell=%llu contributor_datalayer_rows=%llu contributor_datalayer_omissions=%llu binding_contributor_links=%llu datalayer_transitions=%llu datalayer_transition_rows=%llu datalayer_transition_omissions=%llu cell_transitions=%llu cell_transition_rows=%llu cell_transition_omissions=%llu"),
+			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu contributor_descriptors=%llu contributor_descriptor_omissions=%llu contributor_without_actor=%llu contributor_without_runtime_cell=%llu contributor_datalayer_rows=%llu contributor_datalayer_omissions=%llu binding_contributor_links=%llu datalayer_transitions=%llu datalayer_transition_rows=%llu datalayer_transition_omissions=%llu cell_transitions=%llu cell_transition_rows=%llu cell_transition_omissions=%llu primitive_teardowns=%llu primitive_teardown_rows=%llu primitive_teardown_omissions=%llu"),
 			MatchCount,
 			AddressGenerationCount,
 			PriorityIdentityCapacity,
@@ -2023,7 +2040,10 @@ namespace
 			static_cast<unsigned long long>(GDataLayerTransitionsOmitted.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GCellTransitionsRecorded.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GCellTransitionRowsRecorded.load(std::memory_order_relaxed)),
-			static_cast<unsigned long long>(GCellTransitionsOmitted.load(std::memory_order_relaxed)));
+			static_cast<unsigned long long>(GCellTransitionsOmitted.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GPrimitiveTeardownsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GPrimitiveTeardownRowsRecorded.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GPrimitiveTeardownsOmitted.load(std::memory_order_relaxed)));
 
 		if (AddressGenerationCount > 1)
 		{
@@ -2875,6 +2895,113 @@ void RecordCellTransition(
 		TransitionId);
 	CopyJournalText(JournalRecord, Text);
 	GJournalWriter.Enqueue(JournalRecord);
+}
+
+uint64 AllocatePrimitiveTeardownId()
+{
+	if (!IsContributorCaptureEnabled())
+	{
+		return 0;
+	}
+
+	const uint64 TeardownId = GNextPrimitiveTeardownId.fetch_add(1, std::memory_order_relaxed);
+	const uint64 MaximumTeardowns = static_cast<uint64>(FMath::Clamp(
+		CVarRHIResourceProvenanceMaxPrimitiveTeardowns.GetValueOnAnyThread(),
+		1,
+		1048576));
+	if (TeardownId > MaximumTeardowns)
+	{
+		GPrimitiveTeardownsOmitted.fetch_add(1, std::memory_order_relaxed);
+		if (GPrimitiveTeardownCoverageReported.exchange(1, std::memory_order_acq_rel) == 0)
+		{
+			const uint32 PackedCoverage = (1u << 31) | 1u;
+			Record(
+				EOperation::PrimitiveTeardownCoverage,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			FJournalQueueRecord JournalRecord = MakeJournalRecord(
+				EJournalRecordKind::Marker,
+				EOperation::PrimitiveTeardownCoverage,
+				nullptr,
+				nullptr,
+				0,
+				0xff,
+				PackedCoverage,
+				CaptureCallerAddress(),
+				0);
+			CopyJournalText(JournalRecord, TEXT("reason=max_primitive_teardowns first_omission=1"));
+			GJournalWriter.Enqueue(JournalRecord);
+		}
+		return 0;
+	}
+
+	GPrimitiveTeardownsRecorded.fetch_add(1, std::memory_order_relaxed);
+	return TeardownId;
+}
+
+void RecordPrimitiveTeardown(
+	EOperation Operation,
+	uint64 TeardownId,
+	uint64 ContributorId,
+	const void* SubjectAddress,
+	uint32 PackedValue,
+	uint64 RelatedId)
+{
+	if (TeardownId == 0 || !IsContributorCaptureEnabled())
+	{
+		return;
+	}
+
+	switch (Operation)
+	{
+	case EOperation::PrimitiveTeardownBegin:
+	case EOperation::PrimitiveTeardownCacheRemove:
+	case EOperation::PrimitiveTeardownBinding:
+	case EOperation::PrimitiveTeardownEnd:
+		break;
+	default:
+		return;
+	}
+
+	GPrimitiveTeardownRowsRecorded.fetch_add(1, std::memory_order_relaxed);
+	Record(
+		Operation,
+		SubjectAddress,
+		nullptr,
+		ContributorId,
+		0xff,
+		PackedValue,
+		RelatedId,
+		TeardownId);
+
+	FJournalQueueRecord JournalRecord = MakeJournalRecord(
+		EJournalRecordKind::Marker,
+		Operation,
+		SubjectAddress,
+		nullptr,
+		ContributorId,
+		0xff,
+		PackedValue,
+		RelatedId,
+		TeardownId);
+	GJournalWriter.Enqueue(JournalRecord);
+}
+
+uint64 SetCurrentPrimitiveTeardownId(uint64 TeardownId)
+{
+	const uint64 PreviousId = GTlsPrimitiveTeardownId;
+	GTlsPrimitiveTeardownId = TeardownId;
+	return PreviousId;
+}
+
+uint64 GetCurrentPrimitiveTeardownId()
+{
+	return GTlsPrimitiveTeardownId;
 }
 
 uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CallerAddress)
