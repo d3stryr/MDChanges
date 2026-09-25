@@ -259,7 +259,13 @@ static void DumpRegisteredMaterialParameterCollections(const FMaterial& Material
 }
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-static uint64 RecordMaterialParameterCollectionAccessOwner(
+struct FMaterialParameterCollectionAccessProvenance
+{
+	uint64 OwnerKey = 0;
+	uint64 ResourceId = 0;
+};
+
+static FMaterialParameterCollectionAccessProvenance RecordMaterialParameterCollectionAccessOwner(
 	FRHIUniformBuffer* UniformBuffer,
 	const FGuid& ParameterCollectionGuid,
 	const TCHAR* Source,
@@ -270,7 +276,7 @@ static uint64 RecordMaterialParameterCollectionAccessOwner(
 {
 	if (!UniformBuffer)
 	{
-		return 0;
+		return {};
 	}
 
 	const uint64 MaterialKey = reinterpret_cast<uint64>(&MaterialRenderProxy);
@@ -283,7 +289,7 @@ static uint64 RecordMaterialParameterCollectionAccessOwner(
 		bNeedsOwnerText);
 	if (ResourceId == 0)
 	{
-		return 0;
+		return {};
 	}
 
 	if (bNeedsOwnerText)
@@ -291,14 +297,26 @@ static uint64 RecordMaterialParameterCollectionAccessOwner(
 		const FString MaterialPath = Material.GetFullPath();
 		const FString RenderProxyName = MaterialRenderProxy.GetFriendlyName();
 		const FString CollectionGuid = ParameterCollectionGuid.ToString();
-		TStringBuilder<512> OwnerText;
+		const FString PrimitiveOwner = PrimitiveSceneProxy
+			? PrimitiveSceneProxy->GetOwnerName().ToString()
+			: TEXT("<immediate>");
+		const FString PrimitiveResource = PrimitiveSceneProxy
+			? PrimitiveSceneProxy->GetResourceName().ToString()
+			: TEXT("<immediate>");
+		const FString PrimitiveLevel = PrimitiveSceneProxy
+			? PrimitiveSceneProxy->GetLevelName().ToString()
+			: TEXT("<immediate>");
+		TStringBuilder<768> OwnerText;
 		OwnerText.Appendf(
-			TEXT("owner_key=0x%llx source=%s material=%s render_proxy=%s collection_guid=%s mesh_context=%s"),
+			TEXT("owner_key=0x%llx source=%s material=%s render_proxy=%s collection_guid=%s primitive_owner=%s primitive_resource=%s primitive_level=%s mesh_context=%s"),
 			static_cast<unsigned long long>(OwnerKey),
 			Source,
 			*MaterialPath,
 			*RenderProxyName,
 			*CollectionGuid,
+			*PrimitiveOwner,
+			*PrimitiveResource,
+			*PrimitiveLevel,
 			PrimitiveSceneProxy ? TEXT("mesh") : TEXT("immediate"));
 
 		UE::RHI::ResourceProvenance::RecordAccessOwner(
@@ -309,7 +327,7 @@ static uint64 RecordMaterialParameterCollectionAccessOwner(
 			UE::RHI::ResourceProvenance::CaptureCallerAddress());
 	}
 
-	return OwnerKey;
+	return { OwnerKey, ResourceId };
 }
 #endif
 
@@ -385,7 +403,7 @@ void FMaterialShader::SetParameters(
 			}
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-			const uint64 AccessOwnerKey = RecordMaterialParameterCollectionAccessOwner(
+			const FMaterialParameterCollectionAccessProvenance AccessProvenance = RecordMaterialParameterCollectionAccessOwner(
 				UniformBuffer,
 				ParameterCollections[CollectionIndex],
 				TEXT("ImmediateMaterialSet"),
@@ -393,7 +411,7 @@ void FMaterialShader::SetParameters(
 				*MaterialRenderProxy,
 				Material,
 				nullptr);
-			UE::RHI::ResourceProvenance::StageAccessOwner(UniformBuffer, AccessOwnerKey);
+			UE::RHI::ResourceProvenance::StageAccessOwner(UniformBuffer, AccessProvenance.OwnerKey);
 #endif
 
 			SetUniformBufferParameter(BatchedParameters, ParameterCollectionUniformBuffers[CollectionIndex], UniformBuffer);
@@ -462,7 +480,7 @@ void FMaterialShader::GetShaderBindings(
 			}
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-			const uint64 AccessOwnerKey = RecordMaterialParameterCollectionAccessOwner(
+			const FMaterialParameterCollectionAccessProvenance AccessProvenance = RecordMaterialParameterCollectionAccessOwner(
 				UniformBuffer,
 				ParameterCollections[CollectionIndex],
 				TEXT("CachedMeshBinding"),
@@ -473,7 +491,8 @@ void FMaterialShader::GetShaderBindings(
 			ShaderBindings.AddWithProvenanceOwner(
 				ParameterCollectionUniformBuffers[CollectionIndex],
 				UniformBuffer,
-				AccessOwnerKey);
+				AccessProvenance.OwnerKey,
+				AccessProvenance.ResourceId);
 #else
 			ShaderBindings.Add(ParameterCollectionUniformBuffers[CollectionIndex], UniformBuffer);
 #endif
