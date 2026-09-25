@@ -837,6 +837,10 @@ namespace
 		case EOperation::BindingRelease:
 		case EOperation::BindingOwner:
 		case EOperation::BindingInvalidate:
+		case EOperation::CausalRequest:
+		case EOperation::CausalExecute:
+		case EOperation::CausalLink:
+		case EOperation::CausalResource:
 			return true;
 		default:
 			return false;
@@ -862,6 +866,10 @@ namespace
 		case EOperation::BindingRelease:
 		case EOperation::BindingOwner:
 		case EOperation::BindingInvalidate:
+		case EOperation::CausalRequest:
+		case EOperation::CausalExecute:
+		case EOperation::CausalLink:
+		case EOperation::CausalResource:
 			return EJournalRecordKind::CommandUse;
 		default:
 			return EJournalRecordKind::Lifecycle;
@@ -878,6 +886,7 @@ namespace
 
 	std::atomic<uint32> GNextThreadBuffer { 0 };
 	std::atomic<uint64> GNextResourceId { 1 };
+	std::atomic<uint64> GNextCausalId { 1 };
 	std::atomic<uint64> GNextDestroyedIdentity { 0 };
 	std::atomic<uint64> GThreadBufferOverflows { 0 };
 	std::atomic<uint64> GActiveIdentityOverflows { 0 };
@@ -901,6 +910,7 @@ namespace
 	thread_local uint64 GTlsLastExecuteResourceAddress = 0;
 	thread_local uint64 GTlsLastExecuteOwnerKey = 0;
 	thread_local uint64 GTlsLastExecuteOwnerLabelId = 0;
+	thread_local uint64 GTlsCurrentCausalParent = 0;
 	thread_local uint32 GTlsStagedAccessOwnerCount = 0;
 	thread_local FStagedAccessOwner GTlsStagedAccessOwners[StagedAccessOwnerCapacity];
 
@@ -945,6 +955,10 @@ namespace
 		case EOperation::BindingRelease:            return TEXT("BindingRelease");
 		case EOperation::BindingOwner:              return TEXT("BindingOwner");
 		case EOperation::BindingInvalidate:         return TEXT("BindingInvalidate");
+		case EOperation::CausalRequest:             return TEXT("CausalRequest");
+		case EOperation::CausalExecute:             return TEXT("CausalExecute");
+		case EOperation::CausalLink:                return TEXT("CausalLink");
+		case EOperation::CausalResource:            return TEXT("CausalResource");
 		default:                                    return TEXT("Unknown");
 		}
 	}
@@ -2376,6 +2390,20 @@ uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64
 			0,
 			CallerAddress,
 			CorrelationId);
+		if (GTlsCurrentCausalParent != 0)
+		{
+			// CausalLink intentionally stores the parent transaction in caller and the
+			// child RHI command in correlation. The decoder exposes both explicitly.
+			Record(
+				EOperation::CausalLink,
+				ResourceAddress,
+				reinterpret_cast<const void*>(Token.FlagsAddress),
+				Token.ResourceId,
+				Token.ResourceType,
+				0,
+				GTlsCurrentCausalParent,
+				CorrelationId);
+		}
 		if (IsStalePriorityState(Token.LastOperation))
 		{
 			if (FPriorityIdentity* Identity = FindPriorityIdentity(Token.ResourceId))
@@ -2576,6 +2604,72 @@ void RecordBindingLifecycle(
 			OwnerKey,
 			BindingId);
 	}
+}
+
+uint64 AllocateCausalId()
+{
+	if (CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() == 0)
+	{
+		return 0;
+	}
+	return GNextCausalId.fetch_add(1, std::memory_order_relaxed);
+}
+
+void RecordCausalPhase(
+	EOperation Operation,
+	uint64 CausalId,
+	const void* SubjectAddress,
+	uint32 Detail,
+	uint64 CallerAddress)
+{
+	if (CausalId == 0)
+	{
+		return;
+	}
+
+	Record(
+		Operation,
+		SubjectAddress,
+		nullptr,
+		0,
+		0xff,
+		Detail,
+		CallerAddress,
+		CausalId);
+}
+
+uint64 SetCurrentCausalParent(uint64 CausalId)
+{
+	const uint64 PreviousCausalId = GTlsCurrentCausalParent;
+	GTlsCurrentCausalParent = CausalId;
+	return PreviousCausalId;
+}
+
+void RecordResourceCausalLink(
+	const void* ResourceAddress,
+	uint64 CausalId,
+	uint64 CallerAddress)
+{
+	if (CausalId == 0)
+	{
+		return;
+	}
+
+	FPriorityToken Token;
+	if (!ResolvePriorityToken(ResourceAddress, Token))
+	{
+		return;
+	}
+
+	Record(
+		EOperation::CausalResource,
+		ResourceAddress,
+		reinterpret_cast<const void*>(Token.FlagsAddress),
+		Token.ResourceId,
+		Token.ResourceType,
+		0,
+		CallerAddress,
+		CausalId);
 }
 
 uint64 ClaimAccessOwner(
