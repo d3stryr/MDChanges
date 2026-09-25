@@ -57,6 +57,13 @@ OPERATION_NAMES = {
     20: "AccessOwner",
     21: "ReleaseOwner",
     22: "CommandOwner",
+    23: "BindingCreate",
+    24: "BindingCopy",
+    25: "BindingMove",
+    26: "BindingSubmit",
+    27: "BindingRelease",
+    28: "BindingOwner",
+    29: "BindingInvalidate",
 }
 
 RESOURCE_TYPE_NAMES = {
@@ -318,7 +325,7 @@ def main() -> int:
             print(
                 "seconds\tcycles\tkind\toperation\tid\tresource\tflags_address"
                 "\ttype\ttype_name\tthread\tpacked\tcaller\tcorrelation"
-                "\towner_key\trecord_flags\ttext",
+                "\tbinding_id\towner_key\trecord_flags\ttext",
                 file=output_stream,
             )
 
@@ -343,9 +350,16 @@ def main() -> int:
                     owner_key = record.correlation_id
                 elif record.operation == 22:  # CommandOwner stores its key as caller.
                     owner_key = record.caller_address
+                elif record.operation == 28:  # BindingOwner stores its key as caller.
+                    owner_key = record.caller_address
+                binding_id = (
+                    record.correlation_id
+                    if 23 <= record.operation <= 29
+                    else 0
+                )
                 print(
                     "{:.9f}\t{}\t{}\t{}\t{}\t0x{:x}\t0x{:x}\t{}\t{}"
-                    "\t{}\t0x{:08x}\t0x{:x}\t{}\t0x{:x}\t0x{:04x}\t{}".format(
+                    "\t{}\t0x{:08x}\t0x{:x}\t{}\t{}\t0x{:x}\t0x{:04x}\t{}".format(
                         seconds,
                         record.cycles,
                         KIND_NAMES.get(record.kind, f"Unknown({record.kind})"),
@@ -364,6 +378,7 @@ def main() -> int:
                         record.packed_value,
                         record.caller_address,
                         record.correlation_id,
+                        binding_id,
                         owner_key,
                         record.flags,
                         sanitize_tsv(record.text),
