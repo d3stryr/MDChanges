@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [4a408101cb29ea35ea4968ae0c8df1caa843781b](https://github.com/d3stryr/UnrealEngine/commit/4a408101cb29ea35ea4968ae0c8df1caa843781b)
+- Source commit: [72819cc0125fca91ceb9cea9b459a57e2f342f90](https://github.com/d3stryr/UnrealEngine/commit/72819cc0125fca91ceb9cea9b459a57e2f342f90)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -17,15 +17,15 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | File | Source blob | Status | Purpose |
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
-| `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `b6956087101a62b6b2bc2dbe4951c331d4562e90` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, owner tokens, command correlation, and cached-binding lineage API. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `7e0ba38268e34ed3620446c8580f34a4668fa257` | Added | Bounded per-thread events, retained identities, background journal, lifecycle/release owners, access-owner correlation, and generation-safe cached-binding events. |
+| `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `43a642c574f27828fa250255de5314221b7c058d` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, owner tokens, command correlation, cached-binding lineage, and causal-chain API. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `d585077ccbc7171704a0da1ad235b21c456b14b9` | Added | Bounded recorder, retained identities, journal, access/release owners, generation-safe bindings, and parent/child causal correlation. |
 | `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `2a818afce7a330bfeb67a26314cd2d362e1acac2` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, name/owner capture, and copied release-owner markers. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
-| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `0cd929c217f54849e1abe656d2b379fa8343587a` | Added | Filters journals and emits TSV with access/command owners, command correlation, and cached-binding lineage IDs. |
-| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `1437b0a0615b0d92d5fc448f42f1ed13652d9ff3` | Modified | Adds diagnostic path publication and release-owner APIs to the MPC render resource. |
-| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `fa2de0149ca9d9edcd85c12d1b9c472389b44399` | Modified | Captures MPC paths, labels destruction/replacement paths, and associates each uniform-buffer generation. |
+| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `5a4da6c0e57cb98e4a1d3d05d4a0be061ec41e90` | Added | Filters journals and emits TSV with owners, command/binding IDs, causal IDs, and parent correlations. |
+| `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `05148e41f4ee82bc80411c43b96bb20cc179b877` | Modified | Adds path/release APIs and carries diagnostic causal IDs into render-thread MPC updates. |
+| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `d5f71879cde0d845521739ac453f8a118cabd083` | Modified | Captures MPC paths/release causes and records game-thread request, render-thread execution, RHI update, and recreated generation links. |
 | `Engine/Source/Runtime/Engine/Private/World.cpp` | `f78fb1857f489aa63d94f7e05533fe3bee4ed388` | Modified | Records whether a per-world MPC instance was replaced or removed after GC because its weak collection became invalid. |
 | `Engine/Source/Runtime/Renderer/Private/ShaderBaseClasses.cpp` | `10d0b06e5e633c5500a59e13f1e8ff31754704fc` | Modified | Captures material, render proxy, primitive owner/resource/level labels and writes owner plus exact MPC generation into cached bindings. |
 | `Engine/Source/Runtime/Renderer/Public/MaterialShader.h` | `73a09ee6afb8a11792b8ccd8f0517707fa497c4b` | Modified | Carries optional mesh context into diagnostic MPC binding-owner capture without changing existing callers. |
@@ -57,6 +57,7 @@ It records:
 - a compact material-owner token stored beside cached mesh uniform-buffer pointers, copied through existing mesh-binding copies/moves, and linked to the exact deferred-command correlation ID;
 - a unique cached-binding lineage ID plus `BindingCreate`, `BindingCopy`, `BindingMove`, `BindingSubmit`, `BindingInvalidate`, `BindingRelease`, and `BindingOwner` journal rows for tracked MPC generations;
 - the exact resource generation ID copied beside each tracked raw uniform-buffer pointer, so binding events remain unambiguous after address reuse and do not need to dereference a dead resource;
+- a process-unique MPC update causal ID linking the game-thread request, render-thread execution, in-place RHI update command, or newly recreated uniform-buffer generation;
 - primitive owner, primitive resource, and primitive level copied into cached MPC access-owner labels; `primitive_level` is the first World Partition cell clue, while explicit runtime Data Layer membership is intentionally deferred to the bounded contributor feature;
 - assertion-time `command_owner_key` and copied `command_owner` output, with explicit label-eviction, link-overwrite, link-miss, staging-overflow, and owner-set saturation counters;
 - explicit MPC release-owner labels distinguishing world post-GC removal, world instance replacement, UObject destruction, scene-map refresh, and uniform-buffer replacement;
@@ -92,6 +93,7 @@ Decode a failing generation or address with:
 ```bash
 python Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py <journal.rhiprov> --id 1047167
 python Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py <journal.rhiprov> --address 0x106b8df2e0
+python Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py <journal.rhiprov> --causal 42
 ```
 
 The assertion path requests a full journal flush for up to one second and reports the resolved path, queued/drained counts, bytes written, queue drops, disk-cap drops, write failures, and startup failures.
@@ -129,6 +131,16 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - A full diagnostic PS5 rebuild is required because the instrumented `FRHIResource` layout and RHI module implementation changed.
 
 ## Change log
+
+### 2026-09-25 — Feature 2: cross-thread MPC causal timeline
+
+- Allocate a causal ID only when `r.RHI.ResourceProvenance.CommandUses=1`; the disabled path returns zero without journaling.
+- Record `CausalRequest` on the game thread before `UpdateCollectionCommand` is queued and `CausalExecute` when that render command begins. `packed=1` means the request asked to recreate the uniform buffer; `packed=0` means an in-place update was requested.
+- Stage the causal ID only around the matching in-place `UpdateUniformBuffer` call. `BeginCommandUse` emits `CausalLink` with the parent MPC causal ID and the child RHI command correlation, then the previous thread-local parent is restored.
+- For a recreated buffer, emit `CausalResource` after owner paths promote the new RHI generation. This directly links the new generation ID to the original MPC request.
+- Add TSV columns `causal_id` and `parent_correlation`, plus `--causal <id>` filtering to recover request/execute/resource rows that intentionally have no RHI resource ID on the game-thread side.
+- Causal records are fixed-size journal events; there are no per-update strings, allocations, stack walks, or file writes on gameplay/render threads.
+- Python syntax, whitespace, preprocessor-balance, and source checks passed. This revision has not been compiled with the PS5 SDK/toolchain.
 
 ### 2026-09-25 — Feature 1: cached draw-command binding lifetime audit
 
