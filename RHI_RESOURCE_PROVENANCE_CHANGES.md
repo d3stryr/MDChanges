@@ -336,6 +336,24 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - Added bounded identity, lifecycle, AddRef/Release, deletion, and optional command-use instrumentation.
 - Established this file as the synchronization record for future changes.
 
+## Next features in sequence
+
+### Feature 8 — runtime-cell streaming transition timeline
+
+Planned implementation points:
+
+- Instrument `UWorldPartitionStreamingPolicy::SetCellStateToLoaded`, `SetCellStateToActivated`, and `SetCellsStateToUnloaded`, plus the dynamic streaming-level state callbacks that confirm load/visibility/removal completion.
+- Assign a bounded cell-transition ID and record requested versus completed `Unloaded`/`Loaded`/`Activated` state, cell GUID/debug name/level package, external Data Layer, effective wanted state, and whether the operation was load, activate, deactivate, or unload.
+- Carry the cell identity used by Feature 6 so the decoder can join: Data Layer transition → affected runtime cell → contributor → binding lineage → release snapshot/stale command.
+- Record explicit omissions and pending operations so an incomplete streaming update cannot be mistaken for a completed unload.
+- Keep UObjects and formatted strings on the game thread; render/RHI records retain only copied identifiers and fixed-size values.
+
+Expected proof: whether an MPC generation was released while a cell-associated binding remained live, and whether that cell was unloading/deactivating because of the preceding Data Layer transition.
+
+### Feature 9 — primitive teardown to cached-command invalidation bridge
+
+After Feature 8, add one teardown correlation from primitive/proxy removal through `FPrimitiveSceneInfo::RemoveCachedMeshDrawCommands` to each `BindingInvalidate`/`BindingRelease`. This will distinguish a game-side owner that failed to retire its render proxy from an engine-side cached-command invalidation gap.
+
 ## Synchronization rule
 
 Whenever the diagnostic implementation changes in `d3stryr/UnrealEngine`, update the corresponding complete file in this repository and append a dated entry here. Update the source commit and blob hashes so the mirror can be audited against the engine branch.
