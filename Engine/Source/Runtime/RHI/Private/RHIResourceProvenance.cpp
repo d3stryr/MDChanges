@@ -46,6 +46,7 @@ namespace
 	static constexpr uint32 StagedAccessOwnerCapacity = 16;
 	static constexpr uint32 OwnerLabelCapacity = 8192;
 	static constexpr uint32 CommandOwnerLinkCapacity = 32768;
+	static constexpr uint32 BindingSubmitDedupCapacity = 65536;
 	static constexpr uint32 MaxSelectiveCommandStackCaptures = 256;
 	static constexpr uint32 MaxDumpEvents = 256;
 	static constexpr uint32 JournalQueueCapacity = 16384;
@@ -62,6 +63,7 @@ namespace
 	static_assert((AccessOwnerKeyCapacity & (AccessOwnerKeyCapacity - 1)) == 0, "AccessOwnerKeyCapacity must be a power of two.");
 	static_assert((OwnerLabelCapacity & (OwnerLabelCapacity - 1)) == 0, "OwnerLabelCapacity must be a power of two.");
 	static_assert((CommandOwnerLinkCapacity & (CommandOwnerLinkCapacity - 1)) == 0, "CommandOwnerLinkCapacity must be a power of two.");
+	static_assert((BindingSubmitDedupCapacity & (BindingSubmitDedupCapacity - 1)) == 0, "BindingSubmitDedupCapacity must be a power of two.");
 	static_assert((JournalQueueCapacity & (JournalQueueCapacity - 1)) == 0, "JournalQueueCapacity must be a power of two.");
 
 	TAutoConsoleVariable<int32> CVarRHIResourceProvenanceJournal(
@@ -883,6 +885,7 @@ namespace
 	FPriorityAddressEntry GPriorityAddressIndex[PriorityAddressIndexCapacity];
 	FOwnerLabel GOwnerLabels[OwnerLabelCapacity];
 	FCommandOwnerLink GCommandOwnerLinks[CommandOwnerLinkCapacity];
+	std::atomic<uint64> GBindingSubmitKeys[BindingSubmitDedupCapacity] {};
 
 	std::atomic<uint32> GNextThreadBuffer { 0 };
 	std::atomic<uint64> GNextResourceId { 1 };
@@ -903,6 +906,10 @@ namespace
 	std::atomic<uint64> GCommandOwnerLinkOverwrites { 0 };
 	std::atomic<uint64> GCommandOwnerLinkMisses { 0 };
 	std::atomic<uint64> GStagedAccessOwnerOverflows { 0 };
+	std::atomic<uint64> GBindingSubmitFirstRecords { 0 };
+	std::atomic<uint64> GBindingSubmitStaleRecords { 0 };
+	std::atomic<uint64> GBindingSubmitDeduplicated { 0 };
+	std::atomic<uint64> GBindingSubmitDedupOverwrites { 0 };
 
 	thread_local int32 GTlsThreadBufferIndex = -2;
 	thread_local uint32 GTlsCommandSequence = 0;
@@ -1833,7 +1840,7 @@ namespace
 		}
 
 		UE_LOG(LogRHI, Error,
-			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu"),
+			TEXT("RHI provenance retained coverage: matches=%u address_generations=%u capacity=%u identity_overflows=%llu address_index_overflows=%llu selective_stack_captures=%llu selective_stack_drops=%llu access_owner_claims=%llu access_owner_sets_saturated=%llu owner_label_evictions=%llu command_owner_links=%llu command_owner_overwrites=%llu command_owner_misses=%llu staged_owner_overflows=%llu binding_submit_first=%llu binding_submit_stale=%llu binding_submit_deduplicated=%llu binding_submit_dedup_overwrites=%llu"),
 			MatchCount,
 			AddressGenerationCount,
 			PriorityIdentityCapacity,
@@ -1847,7 +1854,11 @@ namespace
 			static_cast<unsigned long long>(GCommandOwnerLinksStored.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GCommandOwnerLinkOverwrites.load(std::memory_order_relaxed)),
 			static_cast<unsigned long long>(GCommandOwnerLinkMisses.load(std::memory_order_relaxed)),
-			static_cast<unsigned long long>(GStagedAccessOwnerOverflows.load(std::memory_order_relaxed)));
+			static_cast<unsigned long long>(GStagedAccessOwnerOverflows.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GBindingSubmitFirstRecords.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GBindingSubmitStaleRecords.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GBindingSubmitDeduplicated.load(std::memory_order_relaxed)),
+			static_cast<unsigned long long>(GBindingSubmitDedupOverwrites.load(std::memory_order_relaxed)));
 
 		if (AddressGenerationCount > 1)
 		{
@@ -2568,6 +2579,7 @@ void RecordBindingLifecycle(
 
 	uint64 FlagsAddress = 0;
 	uint8 ResourceType = 0xff;
+	bool bResourceWasStale = false;
 	if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
 	{
 		// The retained identity is independent storage. ResourceAddress is only compared
@@ -2576,6 +2588,34 @@ void RecordBindingLifecycle(
 		{
 			FlagsAddress = Identity->FlagsAddress.load(std::memory_order_relaxed);
 			ResourceType = static_cast<uint8>(Identity->ResourceType.load(std::memory_order_relaxed));
+			bResourceWasStale = IsStalePriorityState(static_cast<EOperation>(
+				Identity->LastOperation.load(std::memory_order_acquire)));
+		}
+	}
+
+	if (Operation == EOperation::BindingSubmit)
+	{
+		if (bResourceWasStale)
+		{
+			GBindingSubmitStaleRecords.fetch_add(1, std::memory_order_relaxed);
+		}
+		else
+		{
+			uint64 SubmitKey = BindingId ^ (ResourceId + 0x9e3779b97f4a7c15ull + (BindingId << 6) + (BindingId >> 2));
+			SubmitKey = SubmitKey != 0 ? SubmitKey : 1;
+			std::atomic<uint64>& PublishedKey = GBindingSubmitKeys[
+				HashPriorityValue(SubmitKey, BindingSubmitDedupCapacity - 1)];
+			const uint64 PreviousKey = PublishedKey.exchange(SubmitKey, std::memory_order_acq_rel);
+			if (PreviousKey == SubmitKey)
+			{
+				GBindingSubmitDeduplicated.fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
+			if (PreviousKey != 0)
+			{
+				GBindingSubmitDedupOverwrites.fetch_add(1, std::memory_order_relaxed);
+			}
+			GBindingSubmitFirstRecords.fetch_add(1, std::memory_order_relaxed);
 		}
 	}
 
