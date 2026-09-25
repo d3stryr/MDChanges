@@ -79,7 +79,15 @@ private:
 
 	FUniformBufferLayoutRHIRef UniformBufferLayout;
 
-	void UpdateContents(const FGuid& InId, const TArray<FVector4f>& Data, const FName& InOwnerName, bool bRecreateUniformBuffer);
+	void UpdateContents(
+		const FGuid& InId,
+		const TArray<FVector4f>& Data,
+		const FName& InOwnerName,
+		bool bRecreateUniformBuffer
+#if RHI_RESOURCE_PROVENANCE_ENABLED
+		, uint64 ProvenanceCausalId
+#endif
+	);
 };
 
 // Default instance resources used when rendering a material using a parameter collection but there's no FScene present to get a FMaterialParameterCollectionInstanceResource
