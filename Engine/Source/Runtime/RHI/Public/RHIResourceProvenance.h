@@ -59,7 +59,33 @@ namespace UE::RHI::ResourceProvenance
 		SceneMapInsert,
 		SceneMapRemove,
 		SceneMapReplaceOld,
-		SceneMapReplaceNew
+		SceneMapReplaceNew,
+		ReleaseCause,
+		ReleaseBindingSnapshot,
+		ReleaseBindingCoverage,
+		ContributorRegistered,
+		ContributorActor,
+		ContributorComponent,
+		ContributorWorldPartition,
+		ContributorDataLayer,
+		ContributorRetired,
+		BindingContributor,
+		ContributorCoverageOmitted
+	};
+
+	enum class EReleaseCause : uint8
+	{
+		Unknown,
+		MPCAssetBeginDestroy,
+		MPCAssetFinishDestroy,
+		MPCInstanceFinishDestroy,
+		MPCGameThreadDestroy,
+		MPCUniformBufferRecreate,
+		MPCUniformBufferInvalidReplacement,
+		WorldReplacedMPCInstance,
+		WorldPostGCInvalidCollection,
+		SceneMapRemove,
+		SceneMapReplace
 	};
 
 	FORCEINLINE uint64 CaptureCallerAddress()
@@ -119,6 +145,13 @@ namespace UE::RHI::ResourceProvenance
 	RHI_API uint64 BeginCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CallerAddress);
 	RHI_API void RecordCommandUse(EOperation Operation, const void* ResourceAddress, uint64 CorrelationId, uint64 CallerAddress);
 	RHI_API void RecordBindingStore(const void* ResourceAddress, uint64 CallerAddress);
+	RHI_API void RecordReleaseCause(
+		EReleaseCause Cause,
+		uint64 ResourceId,
+		const void* ResourceAddress,
+		const void* FlagsAddress,
+		uint8 ResourceType,
+		uint64 CallerAddress);
 
 	/**
 	 * Records the lifetime of a cached binding using its saved resource generation.
@@ -130,6 +163,28 @@ namespace UE::RHI::ResourceProvenance
 		const void* ResourceAddress,
 		uint64 BindingId,
 		uint64 OwnerKey,
+		uint64 ContributorId,
+		uint64 CallerAddress);
+
+	/** Returns whether bounded actor/component/World Partition contributor capture is active. */
+	RHI_API bool IsContributorCaptureEnabled();
+
+	/** Allocates one bounded contributor id, or zero when capture is disabled/exhausted. */
+	RHI_API uint64 AllocateContributorId();
+
+	/** Maximum number of Data Layer descriptor rows retained per contributor. */
+	RHI_API uint32 GetMaxContributorDataLayers();
+
+	/**
+	 * Records immutable contributor metadata. Text is copied synchronously into the
+	 * journal queue; SubjectAddress is treated as an opaque identity token only.
+	 */
+	RHI_API void RecordContributorMetadata(
+		EOperation Operation,
+		uint64 ContributorId,
+		const void* SubjectAddress,
+		uint32 PackedValue,
+		const TCHAR* Text,
 		uint64 CallerAddress);
 
 	/** Allocates an always-on correlation id for diagnostic timelines. */

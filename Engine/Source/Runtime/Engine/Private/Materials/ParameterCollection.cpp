@@ -121,6 +121,9 @@ void UMaterialParameterCollection::BeginDestroy()
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 				if (FRHIUniformBuffer* UniformBuffer = Resource->GetUniformBuffer())
 				{
+					UniformBuffer->RecordProvenanceReleaseCause(
+						UE::RHI::ResourceProvenance::EReleaseCause::MPCAssetBeginDestroy,
+						UE::RHI::ResourceProvenance::CaptureCallerAddress());
 					UniformBuffer->RecordProvenanceReleaseOwner(*ReleaseOwner);
 				}
 #endif
@@ -146,6 +149,9 @@ void UMaterialParameterCollection::FinishDestroy()
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 		DefaultResource->GameThread_RecordProvenanceReleaseOwner(
 			FString::Printf(TEXT("cause=MPCAssetFinishDestroy collection=%s"), *GetPathName()));
+		DefaultResource->GameThread_RecordProvenanceReleaseCause(
+			UE::RHI::ResourceProvenance::EReleaseCause::MPCAssetFinishDestroy,
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
 #endif
 		DefaultResource->GameThread_Destroy();
 		DefaultResource = nullptr;
@@ -1175,6 +1181,9 @@ void UMaterialParameterCollectionInstance::FinishDestroy()
 			*GetPathName(),
 			*GetPathNameSafe(Collection.Get()),
 			*GetPathNameSafe(World.Get())));
+		Resource->GameThread_RecordProvenanceReleaseCause(
+			UE::RHI::ResourceProvenance::EReleaseCause::MPCInstanceFinishDestroy,
+			UE::RHI::ResourceProvenance::CaptureCallerAddress());
 #endif
 		Resource->GameThread_Destroy();
 		Resource = nullptr;
@@ -1221,6 +1230,27 @@ void FMaterialParameterCollectionInstanceResource::GameThread_RecordProvenanceRe
 			if (Resource->UniformBuffer.IsValid())
 			{
 				Resource->UniformBuffer->RecordProvenanceReleaseOwner(*ReleaseOwner);
+			}
+		}
+	);
+}
+
+void FMaterialParameterCollectionInstanceResource::GameThread_RecordProvenanceReleaseCause(
+	UE::RHI::ResourceProvenance::EReleaseCause Cause,
+	uint64 CallerAddress)
+{
+	if (UNLIKELY(!FApp::CanEverRender()))
+	{
+		return;
+	}
+
+	FMaterialParameterCollectionInstanceResource* Resource = this;
+	ENQUEUE_RENDER_COMMAND(RecordCollectionReleaseCauseCommand)(
+		[Resource, Cause, CallerAddress](FRHICommandListImmediate&)
+		{
+			if (Resource->UniformBuffer.IsValid())
+			{
+				Resource->UniformBuffer->RecordProvenanceReleaseCause(Cause, CallerAddress);
 			}
 		}
 	);
@@ -1315,6 +1345,9 @@ void FMaterialParameterCollectionInstanceResource::GameThread_Destroy()
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 			if (Resource->UniformBuffer.IsValid())
 			{
+				Resource->UniformBuffer->RecordProvenanceReleaseCause(
+					UE::RHI::ResourceProvenance::EReleaseCause::MPCGameThreadDestroy,
+					UE::RHI::ResourceProvenance::CaptureCallerAddress());
 				Resource->UniformBuffer->RecordProvenanceReleaseReason(TEXT("MPC GameThread_Destroy SafeRelease"));
 			}
 #endif
@@ -1373,6 +1406,11 @@ void FMaterialParameterCollectionInstanceResource::UpdateContents(
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 			if (UniformBuffer.IsValid())
 			{
+				UniformBuffer->RecordProvenanceReleaseCause(
+					bRecreateUniformBuffer
+						? UE::RHI::ResourceProvenance::EReleaseCause::MPCUniformBufferRecreate
+						: UE::RHI::ResourceProvenance::EReleaseCause::MPCUniformBufferInvalidReplacement,
+					UE::RHI::ResourceProvenance::CaptureCallerAddress());
 				UniformBuffer->RecordProvenanceReleaseOwner(
 					bRecreateUniformBuffer
 						? TEXT("cause=MPCUpdateContentsReplace recreate_uniform_buffer=true")

@@ -39,6 +39,11 @@ public:
 	/** Publish a copied higher-level reason for why this owner is about to relinquish the resource. */
 	void GameThread_RecordProvenanceReleaseOwner(FString InReleaseOwner);
 
+	/** Queue a typed release cause and a snapshot of retained cached bindings. */
+	void GameThread_RecordProvenanceReleaseCause(
+		UE::RHI::ResourceProvenance::EReleaseCause Cause,
+		uint64 CallerAddress);
+
 	/** Queue a compact fixed-size lifecycle event without copying or formatting strings. */
 	void GameThread_RecordProvenanceEvent(
 		UE::RHI::ResourceProvenance::EOperation Operation,

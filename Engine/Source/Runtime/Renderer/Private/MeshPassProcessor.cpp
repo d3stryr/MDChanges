@@ -645,6 +645,7 @@ void FMeshDrawShaderBindings::RecordProvenanceLifecycle(
 		FRHIUniformBuffer* const* UniformBuffers = SingleShaderBindings.GetUniformBufferStart();
 		const uint64* OwnerKeys = SingleShaderBindings.GetProvenanceOwnerStart();
 		const uint64* ResourceIds = SingleShaderBindings.GetProvenanceResourceIdStart();
+		const uint64* ContributorIds = SingleShaderBindings.GetProvenanceContributorIdStart();
 		const int32 NumUniformBuffers = ShaderLayouts[ShaderBindingsIndex].ParameterMapInfo.UniformBuffers.Num();
 
 		for (int32 UniformBufferIndex = 0; UniformBufferIndex < NumUniformBuffers; ++UniformBufferIndex)
@@ -657,6 +658,7 @@ void FMeshDrawShaderBindings::RecordProvenanceLifecycle(
 					UniformBuffers[UniformBufferIndex],
 					ProvenanceBindingId,
 					OwnerKeys[UniformBufferIndex],
+					ContributorIds[UniformBufferIndex],
 					CallerAddress);
 			}
 		}
