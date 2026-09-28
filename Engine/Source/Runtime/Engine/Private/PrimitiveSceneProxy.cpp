@@ -32,6 +32,7 @@
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 #include "Misc/StringBuilder.h"
 #include "GameFramework/Actor.h"
+#include "Engine/Level.h"
 #include "RHIResourceProvenance.h"
 #include "WorldPartition/DataLayer/DataLayerInstance.h"
 #include "WorldPartition/WorldPartitionRuntimeCell.h"
@@ -373,8 +374,9 @@ namespace
 		}
 
 		const AActor* OwnerActor = Cast<AActor>(ProxyDesc.GetOwner());
-		const IWorldPartitionCell* RuntimeCell = OwnerActor
-			? OwnerActor->GetWorldPartitionRuntimeCell()
+		const ULevel* OwnerLevel = OwnerActor ? OwnerActor->GetLevel() : nullptr;
+		const IWorldPartitionCell* RuntimeCell = OwnerLevel
+			? OwnerLevel->GetWorldPartitionRuntimeCell()
 			: nullptr;
 		const uint32 PackedRegistration = 1u |
 			(OwnerActor ? (1u << 1) : 0u) |

@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [fde7070c89040a58695ea6142cffb1bd4d64489a](https://github.com/d3stryr/UnrealEngine/commit/fde7070c89040a58695ea6142cffb1bd4d64489a)
+- Source commit: [31fb26ad7ae9b495ec44d642283748d25ca0aeaf](https://github.com/d3stryr/UnrealEngine/commit/31fb26ad7ae9b495ec44d642283748d25ca0aeaf)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -30,7 +30,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/Engine/Private/AssetManager.cpp` | `5b5bfe6ab907428555b350025f5849684479ac3c` | Modified | Records MPC primary-asset bundle requests, load completion handles, and unload state before managed handles are reset. |
 | `Engine/Source/Runtime/Engine/Private/World.cpp` | `ea31e9ec9e8b87ae466ccf591dfb273036a9b4e1` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
 | `Engine/Source/Runtime/Engine/Classes/Engine/World.h` | `866f41cd9c1bf4009d4503b60bee347f79cc913d` | Modified | Registers a diagnostic pre-GC callback so MPC retention state can be compared before and after collection. |
-| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `4cb9f264df6158e0996cfb4558f8b8c5f62e6145` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
+| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `e7e0ae771b1ffef99e36d8d9a4a05709a4a24045` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
 | `Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h` | `2d3862f28881e76987746750f72bef3c4fc60e0d` | Modified | Stores the bounded contributor ID used by cached MPC binding sidecars. |
 | `Engine/Source/Runtime/Engine/Private/WorldPartition/DataLayer/WorldDataLayers.cpp` | `e79211475c720f8abe604b2cda6b15c47b837afa` | Modified | Records bounded target/effective Data Layer state transitions and rejected/no-op requests. |
 | `Engine/Source/Runtime/Engine/Public/WorldPartition/WorldPartitionRuntimeCell.h` | `586785e1737d5fb07cec4814ff565088e45cddbe` | Modified | Carries the game-thread runtime-cell transition ID and requested terminal state across asynchronous streaming callbacks. |
@@ -458,6 +458,16 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
   - `Engine/Source/Runtime/Engine/Private/WorldPartition/WorldPartitionStreamingPolicy.cpp`: `96488dd95a741ce5ee390edbb3f3b25bb9aba4e3`
 - Static integrity checks passed: no truncation marker remains, both corrected includes resolve to a UE 5.8 Core header, and the shadowing declarations are gone.
 - This repair has not yet been compiled with the PS5 SDK/toolchain.
+
+## 2026-09-28 — public runtime-cell accessor compile fix
+
+- UE 5.8 declares `AActor::GetWorldPartitionRuntimeCell()` private, so contributor instrumentation cannot call it directly.
+- The lookup now obtains the actor's public `ULevel` and calls the public `ULevel::GetWorldPartitionRuntimeCell()` accessor.
+- Added the explicit `Engine/Level.h` include in the diagnostic-only include block.
+- Confirmed this file still uses `Misc/StringBuilder.h`; no `Containers/StringBuilder.h` reference remains.
+- Engine commit: `31fb26ad7ae9b495ec44d642283748d25ca0aeaf`.
+- Updated source blob: `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` = `e7e0ae771b1ffef99e36d8d9a4a05709a4a24045`.
+- This targeted repair has not yet been compiled with the PS5 SDK/toolchain.
 
 ## Next enhancement in sequence
 
