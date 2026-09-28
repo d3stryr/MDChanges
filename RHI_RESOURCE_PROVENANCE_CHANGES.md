@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [31fb26ad7ae9b495ec44d642283748d25ca0aeaf](https://github.com/d3stryr/UnrealEngine/commit/31fb26ad7ae9b495ec44d642283748d25ca0aeaf)
+- Source commit: [fc717f0a4cbde2b472a68b2e036e615e0a8783bc](https://github.com/d3stryr/UnrealEngine/commit/fc717f0a4cbde2b472a68b2e036e615e0a8783bc)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -30,7 +30,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/Engine/Private/AssetManager.cpp` | `5b5bfe6ab907428555b350025f5849684479ac3c` | Modified | Records MPC primary-asset bundle requests, load completion handles, and unload state before managed handles are reset. |
 | `Engine/Source/Runtime/Engine/Private/World.cpp` | `ea31e9ec9e8b87ae466ccf591dfb273036a9b4e1` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
 | `Engine/Source/Runtime/Engine/Classes/Engine/World.h` | `866f41cd9c1bf4009d4503b60bee347f79cc913d` | Modified | Registers a diagnostic pre-GC callback so MPC retention state can be compared before and after collection. |
-| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `e7e0ae771b1ffef99e36d8d9a4a05709a4a24045` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
+| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `c799bed67b3df3e9a49ca935c1bbc0d42de601e8` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
 | `Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h` | `2d3862f28881e76987746750f72bef3c4fc60e0d` | Modified | Stores the bounded contributor ID used by cached MPC binding sidecars. |
 | `Engine/Source/Runtime/Engine/Private/WorldPartition/DataLayer/WorldDataLayers.cpp` | `e79211475c720f8abe604b2cda6b15c47b837afa` | Modified | Records bounded target/effective Data Layer state transitions and rejected/no-op requests. |
 | `Engine/Source/Runtime/Engine/Public/WorldPartition/WorldPartitionRuntimeCell.h` | `586785e1737d5fb07cec4814ff565088e45cddbe` | Modified | Carries the game-thread runtime-cell transition ID and requested terminal state across asynchronous streaming callbacks. |
@@ -467,6 +467,17 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
 - Confirmed this file still uses `Misc/StringBuilder.h`; no `Containers/StringBuilder.h` reference remains.
 - Engine commit: `31fb26ad7ae9b495ec44d642283748d25ca0aeaf`.
 - Updated source blob: `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` = `e7e0ae771b1ffef99e36d8d9a4a05709a4a24045`.
+- This targeted repair has not yet been compiled with the PS5 SDK/toolchain.
+
+## 2026-09-28 — cooked runtime-cell metadata fix
+
+- `AActor::GetRuntimeGrid()` and `AActor::GetIsSpatiallyLoaded()` are declared only under `WITH_EDITOR` in UE 5.8. They can compile in a Win64 Editor target while remaining unavailable to a cooked PS5 Development target.
+- Removed both editor-only actor calls from contributor instrumentation.
+- Spatial loading state now comes from `UWorldPartitionRuntimeCell::IsSpatiallyLoaded()`, guarded by the already-resolved runtime-cell object.
+- Actor records now emit `spatial_state_known`; the value is only authoritative when a runtime cell is present.
+- Runtime-grid text was removed because the cooked runtime-cell record already carries its GUID, debug name, level package, external Data Layer, and Data Layer membership.
+- Engine commit: `fc717f0a4cbde2b472a68b2e036e615e0a8783bc`.
+- Updated source blob: `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` = `c799bed67b3df3e9a49ca935c1bbc0d42de601e8`.
 - This targeted repair has not yet been compiled with the PS5 SDK/toolchain.
 
 ## Next enhancement in sequence

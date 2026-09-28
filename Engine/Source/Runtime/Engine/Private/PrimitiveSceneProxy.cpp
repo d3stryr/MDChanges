@@ -378,6 +378,10 @@ namespace
 		const IWorldPartitionCell* RuntimeCell = OwnerLevel
 			? OwnerLevel->GetWorldPartitionRuntimeCell()
 			: nullptr;
+		const UWorldPartitionRuntimeCell* RuntimeCellObject = RuntimeCell
+			? Cast<UWorldPartitionRuntimeCell>(RuntimeCell->_getUObject())
+			: nullptr;
+		const bool bIsSpatiallyLoaded = RuntimeCellObject && RuntimeCellObject->IsSpatiallyLoaded();
 		const uint32 PackedRegistration = 1u |
 			(OwnerActor ? (1u << 1) : 0u) |
 			(RuntimeCell ? (1u << 2) : 0u);
@@ -412,15 +416,15 @@ namespace
 		{
 			TStringBuilder<1024> ActorText;
 			ActorText.Appendf(
-				TEXT("runtime_grid=%s spatially_loaded=%u actor_data_layers=%u has_runtime_cell=%u actor=%s"),
-				*OwnerActor->GetRuntimeGrid().ToString(),
-				static_cast<uint32>(OwnerActor->GetIsSpatiallyLoaded()),
+				TEXT("spatially_loaded=%u spatial_state_known=%u actor_data_layers=%u has_runtime_cell=%u actor=%s"),
+				static_cast<uint32>(bIsSpatiallyLoaded),
+				static_cast<uint32>(RuntimeCellObject != nullptr),
 				static_cast<uint32>(ActorDataLayerInstances.Num()),
 				static_cast<uint32>(RuntimeCell != nullptr),
 				*OwnerActor->GetPathName());
 			const uint32 PackedActor =
 				FMath::Min<uint32>(ActorDataLayerInstances.Num(), MAX_uint16) |
-				(OwnerActor->GetIsSpatiallyLoaded() ? (1u << 16) : 0u) |
+				(bIsSpatiallyLoaded ? (1u << 16) : 0u) |
 				(RuntimeCell ? (1u << 17) : 0u);
 			RecordContributorMetadata(
 				EOperation::ContributorActor,
@@ -451,12 +455,9 @@ namespace
 
 		if (RuntimeCell)
 		{
-			FGuid CellGuid;
-			if (const UWorldPartitionRuntimeCell* RuntimeCellObject =
-				Cast<UWorldPartitionRuntimeCell>(RuntimeCell->_getUObject()))
-			{
-				CellGuid = RuntimeCellObject->GetGuid();
-			}
+			const FGuid CellGuid = RuntimeCellObject
+				? RuntimeCellObject->GetGuid()
+				: FGuid();
 
 			TStringBuilder<1024> CellText;
 			CellText.Appendf(
