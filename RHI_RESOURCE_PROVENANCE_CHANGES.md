@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [99f18072aa9d1b3958b18fd7af5032f1343e3ae9](https://github.com/d3stryr/UnrealEngine/commit/99f18072aa9d1b3958b18fd7af5032f1343e3ae9)
+- Source commit: [0111b31b8486134947613d6980d3619bc0ecefdb](https://github.com/d3stryr/UnrealEngine/commit/0111b31b8486134947613d6980d3619bc0ecefdb)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -23,9 +23,9 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
-| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `0d8a8ad04de7f1b571092fbf63660ac95a628f0a` | Added | Filters journals and emits precision-safe TSV, escaped Markdown tables, or JSON with owners, command/binding IDs, causal IDs, GC state, and scene-refresh correlations. |
-| `RHI_RESOURCE_PROVENANCE_RUNBOOK.md` | `d3ed5e66ada9125b989c08600718eb786d5894a4` | Added | Operational guide for PS5 launch settings, capture verification, journal retrieval, filtering, TSV/Markdown/JSON exports, responsibility reports, interpretation, and troubleshooting. |
-| `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` | `85e9b4e0e3bb293dc69f7d382655b99bd71d0747` | Added | Reusable confidential-environment prompt for joining generation, release, binding, contributor, command, World Partition, Data Layer, and coverage evidence from TSV, TXT, Markdown, JSON, or Excel inputs. |
+| `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `6c900a40efc4d5e8d865b897c6cba4a8eb2ab3d0` | Added | Filters journals by generation, address, owner key, collection GUID, and causal relationships; emits precision-safe TSV, escaped Markdown tables, or JSON. |
+| `RHI_RESOURCE_PROVENANCE_RUNBOOK.md` | `86a98ad58531fb8f8232ddc5f5f8e271c7eb2c3c` | Added | Operational guide for PS5 launch settings, capture verification, owner/GUID discovery, journal filtering, TSV/Markdown/JSON exports, responsibility reports, interpretation, and troubleshooting. |
+| `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` | `b23ae2b02fa5ff6bdf1361b181e69c56b4ce737c` | Added | Reusable confidential-environment prompt for joining generation, exact owner-key and collection-GUID evidence, release, binding, contributor, command, World Partition, Data Layer, and coverage data. |
 | `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `318c4ccc86833bd24bc182002cab56a36296f664` | Modified | Adds path/release/fixed-event APIs and carries diagnostic causal IDs into render-thread MPC updates. |
 | `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `5f0b8def38a2b82258a898816e0dbc6a552fbc5f` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
 | `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
@@ -175,7 +175,7 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - Bound capture to 65,536 teardown correlations by default with `r.RHI.ResourceProvenance.MaxPrimitiveTeardowns`; first omission and aggregate assertion coverage are explicit.
 - Add TSV `primitive_teardown_id`, bridge detail decoding, and `--primitive-teardown <id>` filtering. Existing `--binding` and `--contributor` filters also recognize teardown bridge rows.
 - Python syntax, a synthetic contributor/binding/teardown join filter, delimiter/preprocessor balance, operation/declaration wiring, and source-blob checks passed. No PS5 SDK compile has been run.
-- Source commit: `25fcc7903b40c9fc46f003608d08e9a152ccbb77`.
+- Source commit: [0111b31b8486134947613d6980d3619bc0ecefdb](https://github.com/d3stryr/UnrealEngine/commit/0111b31b8486134947613d6980d3619bc0ecefdb)
 
 ### 2026-09-25 — Feature 8: bounded runtime-cell streaming transition timeline
 
@@ -525,6 +525,19 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
 - Runbook blob: `d3ed5e66ada9125b989c08600718eb786d5894a4`.
 - Analysis-prompt blob: `85e9b4e0e3bb293dc69f7d382655b99bd71d0747`.
 - Validation: Python compilation plus Markdown escaping and JSON round-trip assertions passed with values above signed and unsigned 64-bit boundaries.
+
+## 2026-09-28 — owner-key and collection-GUID decoder filters
+
+- Added `--owner-key` with decimal/hexadecimal parsing for exact `AccessOwner`, `CommandOwner`, and `BindingOwner` carrier rows.
+- Added `--collection-guid` with case-insensitive normalization; braces and hyphens are optional, while exactly 32 hexadecimal digits are required.
+- Added the canonical lowercase `collection_guid` output column beside `owner_key` in TSV, Markdown, and JSON.
+- The GUID filter intentionally matches explicit `collection_guid=` evidence on `AccessOwner` rows; it does not infer a GUID from truncated material or owner labels.
+- Updated the runbook with discovery commands and the analysis prompt with exact owner-key/GUID join rules.
+- Engine commit: `0111b31b8486134947613d6980d3619bc0ecefdb`.
+- Decoder blob: `6c900a40efc4d5e8d865b897c6cba4a8eb2ab3d0`.
+- Runbook blob: `86a98ad58531fb8f8232ddc5f5f8e271c7eb2c3c`.
+- Analysis-prompt blob: `b23ae2b02fa5ff6bdf1361b181e69c56b4ce737c`.
+- Validation: Python compilation, CLI-help exposure, owner-key carrier matching, GUID normalization, invalid-GUID rejection, and output-column assertions passed.
 
 ## Next enhancement in sequence
 

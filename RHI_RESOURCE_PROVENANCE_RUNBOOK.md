@@ -123,6 +123,26 @@ py -3 $Decoder $Journal --id 1047167 `
 
 All existing filters work with all three formats. `--responsibility-report` already produces Markdown; use its default behavior or `--format markdown`. It intentionally rejects `--format json`.
 
+### Owner-key and collection-GUID discovery
+
+Use `--owner-key` with either decimal or `0x` hexadecimal input. It emits the explicit `AccessOwner`, `CommandOwner`, and `BindingOwner` rows carrying that key:
+
+```powershell
+$OwnerKey = 0xe178c1313c798be2
+py -3 $Decoder $Journal --owner-key $OwnerKey `
+  --format markdown --output ".\owner-key.md"
+```
+
+Use `--collection-guid` with a 32-digit GUID; braces and hyphens are optional and matching is case-insensitive:
+
+```powershell
+$CollectionGuid = "01234567-89ab-cdef-0123-456789abcdef"
+py -3 $Decoder $Journal --collection-guid $CollectionGuid `
+  --format json --output ".\collection-guid.json"
+```
+
+The collection GUID is recorded on `AccessOwner` rows. The decoder emits it in the canonical lowercase, 32-hex-digit `collection_guid` column. Use the returned `owner_key`, `binding_id`, and resource `id` with their dedicated filters to expand the full binding and generation timelines.
+
 ## Recommended filtering workflow
 
 ### Step 1: discover the target generation
@@ -152,6 +172,8 @@ py -3 $Decoder $Journal `
 - `data_layer_transition_id`;
 - `cell_transition_id`;
 - `primitive_teardown_id`;
+- `owner_key`;
+- `collection_guid`;
 - `detail` and `text`.
 
 The `id` column is the uniform-buffer generation ID. Prefer it over the raw address because an allocator may reuse the same address for later generations.

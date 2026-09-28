@@ -52,6 +52,7 @@ Before analyzing:
 11. For decoder text output, preserve leading `# version=...` metadata and use the following tab-separated header row as the column definition.
 12. For an actual responsibility Markdown report, parse its headings, verdict, evidence lists, and coverage gaps as Markdown rather than TSV.
 13. For native decoder JSON, parse the `records` array using the `columns` list as the canonical order, retain the `metadata` and `summary` objects, and do not coerce any string field to a floating-point number.
+14. Preserve `owner_key` as hexadecimal text and `collection_guid` as canonical lowercase 32-hex-digit text. Use exact equality for both; never join records by a truncated owner label or a partial GUID.
 
 ## Investigation objective
 
@@ -62,6 +63,7 @@ Determine, separately:
 3. Which callsite performed the final RHI reference decrement.
 4. Which binding retained or acquired the stale uniform-buffer generation.
 5. Which actor, component, material, render proxy, runtime cell, and Data Layer contributed that binding.
+   Join owner records by exact `owner_key` and confirm the material's exact `collection_guid`; do not infer either value from a truncated label.
 6. Which command submitted and executed the stale reference.
 7. Whether World Partition or a Data Layer transition causally initiated the teardown.
 8. Whether the evidence proves a use-after-release or merely shows suspicious retention.
@@ -78,6 +80,8 @@ Use the responsibility report and discovery data to identify:
 - resource address;
 - atomic-flags address;
 - MPC collection path;
+- MPC collection GUID (`collection_guid`);
+- MPC access owner key (`owner_key`);
 - MPC instance path;
 - world path;
 - creation timestamp;

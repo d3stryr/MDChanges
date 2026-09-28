@@ -893,6 +893,8 @@ def record_matches(
     data_layer_transition_id: Optional[int],
     cell_transition_id: Optional[int],
     primitive_teardown_id: Optional[int],
+    owner_key: Optional[int],
+    collection_guid: Optional[str],
 ) -> bool:
     if resource_id is not None and record.resource_id != resource_id:
         return False
@@ -959,6 +961,13 @@ def record_matches(
         )
         if record_teardown_id != primitive_teardown_id:
             return False
+    if owner_key is not None and record_owner_key(record) != owner_key:
+        return False
+    if (
+        collection_guid is not None
+        and extract_collection_guid(record.text) != collection_guid
+    ):
+        return False
     return True
 
 
@@ -985,6 +994,7 @@ OUTPUT_COLUMNS = (
     "cell_transition_id",
     "primitive_teardown_id",
     "owner_key",
+    "collection_guid",
     "record_flags",
     "detail",
     "text",
@@ -1014,15 +1024,50 @@ def escape_markdown_cell(value: str) -> str:
     )
 
 
+def record_owner_key(record: Record) -> int:
+    if record.operation == 20:  # AccessOwner stores its key as correlation.
+        return record.correlation_id
+    if record.operation == 22:  # CommandOwner stores its key as caller.
+        return record.caller_address
+    if record.operation == 28:  # BindingOwner stores its key as caller.
+        return record.caller_address
+    return 0
+
+
+def normalize_collection_guid(value: str) -> str:
+    return "".join(
+        character
+        for character in value.casefold()
+        if character in "0123456789abcdef"
+    )
+
+
+def parse_collection_guid(value: str) -> str:
+    normalized = normalize_collection_guid(value)
+    if len(normalized) != 32:
+        raise argparse.ArgumentTypeError(
+            "collection GUID must contain exactly 32 hexadecimal digits"
+        )
+    return normalized
+
+
+def extract_collection_guid(text: str) -> str:
+    marker = "collection_guid="
+    marker_index = text.casefold().find(marker)
+    if marker_index < 0:
+        return ""
+    value_start = marker_index + len(marker)
+    value_end = value_start
+    while value_end < len(text) and not text[value_end].isspace():
+        value_end += 1
+    normalized = normalize_collection_guid(text[value_start:value_end])
+    return normalized if len(normalized) == 32 else ""
+
+
 def format_record_fields(record: Record, header: FileHeader) -> list[str]:
     seconds = (record.cycles - header.start_cycles) * header.seconds_per_cycle
-    owner_key = 0
-    if record.operation == 20:  # AccessOwner stores its key as correlation.
-        owner_key = record.correlation_id
-    elif record.operation == 22:  # CommandOwner stores its key as caller.
-        owner_key = record.caller_address
-    elif record.operation == 28:  # BindingOwner stores its key as caller.
-        owner_key = record.caller_address
+    owner_key = record_owner_key(record)
+    collection_guid = extract_collection_guid(record.text)
     binding_id = (
         record.caller_address
         if record.operation == 68
@@ -1084,6 +1129,7 @@ def format_record_fields(record: Record, header: FileHeader) -> list[str]:
         str(cell_transition_id),
         str(primitive_teardown_id),
         f"0x{owner_key:x}",
+        collection_guid,
         f"0x{record.flags:04x}",
         decode_packed_detail(record),
         sanitize_tsv(record.text),
@@ -1172,6 +1218,18 @@ def main() -> int:
     parser.add_argument("--id", type=parse_integer, dest="resource_id")
     parser.add_argument("--address", type=parse_integer, dest="resource_address")
     parser.add_argument("--flags", type=parse_integer, dest="flags_address")
+    parser.add_argument(
+        "--owner-key",
+        type=parse_integer,
+        dest="owner_key",
+        help="Emit AccessOwner, CommandOwner, or BindingOwner rows carrying this owner key.",
+    )
+    parser.add_argument(
+        "--collection-guid",
+        type=parse_collection_guid,
+        dest="collection_guid",
+        help="Emit AccessOwner rows carrying this collection GUID. Braces and hyphens are optional.",
+    )
     parser.add_argument(
         "--causal",
         type=parse_integer,
@@ -1283,6 +1341,8 @@ def main() -> int:
                     args.data_layer_transition_id,
                     args.cell_transition_id,
                     args.primitive_teardown_id,
+                    args.owner_key,
+                    args.collection_guid,
                 ):
                     continue
 
