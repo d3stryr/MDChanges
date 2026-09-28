@@ -30,7 +30,7 @@
 #include "Streaming/SimpleStreamableAssetManager.h"
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-#include "Containers/StringBuilder.h"
+#include "Misc/StringBuilder.h"
 #include "GameFramework/Actor.h"
 #include "RHIResourceProvenance.h"
 #include "WorldPartition/DataLayer/DataLayerInstance.h"

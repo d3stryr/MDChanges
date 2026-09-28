@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [4108687942aea39deb95673006558fc5911f1f5d](https://github.com/d3stryr/UnrealEngine/commit/4108687942aea39deb95673006558fc5911f1f5d)
+- Source commit: [fde7070c89040a58695ea6142cffb1bd4d64489a](https://github.com/d3stryr/UnrealEngine/commit/fde7070c89040a58695ea6142cffb1bd4d64489a)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -28,13 +28,13 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `5f0b8def38a2b82258a898816e0dbc6a552fbc5f` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
 | `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
 | `Engine/Source/Runtime/Engine/Private/AssetManager.cpp` | `5b5bfe6ab907428555b350025f5849684479ac3c` | Modified | Records MPC primary-asset bundle requests, load completion handles, and unload state before managed handles are reset. |
-| `Engine/Source/Runtime/Engine/Private/World.cpp` | `fb79b3df63b135a8985ba15ec6dbc764a7f7af7e` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
+| `Engine/Source/Runtime/Engine/Private/World.cpp` | `ea31e9ec9e8b87ae466ccf591dfb273036a9b4e1` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
 | `Engine/Source/Runtime/Engine/Classes/Engine/World.h` | `866f41cd9c1bf4009d4503b60bee347f79cc913d` | Modified | Registers a diagnostic pre-GC callback so MPC retention state can be compared before and after collection. |
-| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `1c9da27f97c484afde8a5fad94d64b8c3cd60ee9` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
+| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `4cb9f264df6158e0996cfb4558f8b8c5f62e6145` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
 | `Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h` | `2d3862f28881e76987746750f72bef3c4fc60e0d` | Modified | Stores the bounded contributor ID used by cached MPC binding sidecars. |
-| `Engine/Source/Runtime/Engine/Private/WorldPartition/DataLayer/WorldDataLayers.cpp` | `ec37ab811f0b26bc4e52427e9429ffca146dbd0b` | Modified | Records bounded target/effective Data Layer state transitions and rejected/no-op requests. |
+| `Engine/Source/Runtime/Engine/Private/WorldPartition/DataLayer/WorldDataLayers.cpp` | `e79211475c720f8abe604b2cda6b15c47b837afa` | Modified | Records bounded target/effective Data Layer state transitions and rejected/no-op requests. |
 | `Engine/Source/Runtime/Engine/Public/WorldPartition/WorldPartitionRuntimeCell.h` | `586785e1737d5fb07cec4814ff565088e45cddbe` | Modified | Carries the game-thread runtime-cell transition ID and requested terminal state across asynchronous streaming callbacks. |
-| `Engine/Source/Runtime/Engine/Private/WorldPartition/WorldPartitionStreamingPolicy.cpp` | `5754e038f291bc8cfcabf24641dbc4115e93f822` | Modified | Records cell load, activate, deactivate, unload requests, accepted/blocked outcomes, visibility progress, completion, and supersession. |
+| `Engine/Source/Runtime/Engine/Private/WorldPartition/WorldPartitionStreamingPolicy.cpp` | `96488dd95a741ce5ee390edbb3f3b25bb9aba4e3` | Modified | Records cell load, activate, deactivate, unload requests, accepted/blocked outcomes, visibility progress, completion, and supersession. |
 | `Engine/Source/Runtime/Engine/Private/WorldPartition/WorldPartitionSubsystem.cpp` | `92c6a0f1f0519befc77de393ddf0de6aee83c943` | Modified | Confirms runtime-cell progress/completion/failure from dynamic level-streaming state callbacks. |
 | `Engine/Source/Runtime/Renderer/Private/ShaderBaseClasses.cpp` | `44db3805437fe2dbe14f96e8080d9dc91f62151a` | Modified | Captures material, render proxy, primitive owner/resource/level labels and writes owner plus exact MPC generation into cached bindings. |
 | `Engine/Source/Runtime/Renderer/Public/MaterialShader.h` | `73a09ee6afb8a11792b8ccd8f0517707fa497c4b` | Modified | Carries optional mesh context into diagnostic MPC binding-owner capture without changing existing callers. |
@@ -442,6 +442,22 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
 - Engine commit: `4108687942aea39deb95673006558fc5911f1f5d`.
 - Updated source blob: `5f0b8def38a2b82258a898816e0dbc6a552fbc5f`.
 - This targeted correction has not yet been compiled with the PS5 SDK/toolchain.
+
+## 2026-09-28 — provenance instrumentation compile repair
+
+- The committed and mirrored `World.cpp` contained the literal tool-output prefix `Warning: truncated output (original token count: 88024)` and a truncated-token splice in the middle of a C++ statement. This caused the line-1 parser cascade and the unrelated-looking `IrisConfig.h` errors.
+- Reconstructed `World.cpp` from the clean UE 5.8 source body while preserving the MPC GC, release-site binding snapshot, and targeted reference-chain instrumentation.
+- Replaced the unavailable `Containers/StringBuilder.h` include with UE 5.8's `Misc/StringBuilder.h` in `PrimitiveSceneProxy.cpp` and `WorldDataLayers.cpp`.
+- Renamed the two local `TargetState` variables in `WorldPartitionStreamingPolicy.cpp` to `TransitionTargetState`, resolving C4458 under warnings-as-errors without changing behavior.
+- The prior `AsyncLoadingPhase1 | AsyncLoadingPhase2` correction remains present in `ParameterCollection.cpp`.
+- Engine commit: `fde7070c89040a58695ea6142cffb1bd4d64489a`.
+- Updated source blobs:
+  - `Engine/Source/Runtime/Engine/Private/World.cpp`: `ea31e9ec9e8b87ae466ccf591dfb273036a9b4e1`
+  - `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp`: `4cb9f264df6158e0996cfb4558f8b8c5f62e6145`
+  - `Engine/Source/Runtime/Engine/Private/WorldPartition/DataLayer/WorldDataLayers.cpp`: `e79211475c720f8abe604b2cda6b15c47b837afa`
+  - `Engine/Source/Runtime/Engine/Private/WorldPartition/WorldPartitionStreamingPolicy.cpp`: `96488dd95a741ce5ee390edbb3f3b25bb9aba4e3`
+- Static integrity checks passed: no truncation marker remains, both corrected includes resolve to a UE 5.8 Core header, and the shadowing declarations are gone.
+- This repair has not yet been compiled with the PS5 SDK/toolchain.
 
 ## Next enhancement in sequence
 

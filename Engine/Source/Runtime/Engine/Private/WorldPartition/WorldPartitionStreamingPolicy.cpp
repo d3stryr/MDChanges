@@ -1493,14 +1493,14 @@ void UWorldPartitionStreamingPolicy::OnCellShown(const UWorldPartitionRuntimeCel
 	const uint64 TransitionId = InCell->GetProvenanceCellTransitionId();
 	if (TransitionId != 0)
 	{
-		const EWorldPartitionRuntimeCellState TargetState = InCell->GetProvenanceCellTransitionTarget();
-		const bool bCompleted = TargetState == EWorldPartitionRuntimeCellState::Activated;
+		const EWorldPartitionRuntimeCellState TransitionTargetState = InCell->GetProvenanceCellTransitionTarget();
+		const bool bCompleted = TransitionTargetState == EWorldPartitionRuntimeCellState::Activated;
 		RecordCellTransitionEvent(
 			bCompleted ? UE::RHI::ResourceProvenance::EOperation::CellStateCompleted : UE::RHI::ResourceProvenance::EOperation::CellStateProgress,
 			TransitionId,
 			InCell,
 			EWorldPartitionRuntimeCellState::Loaded,
-			TargetState,
+			TransitionTargetState,
 			EWorldPartitionRuntimeCellState::Activated,
 			ECellTransitionAction::Show);
 		if (bCompleted)
@@ -1518,14 +1518,14 @@ void UWorldPartitionStreamingPolicy::OnCellHidden(const UWorldPartitionRuntimeCe
 	const uint64 TransitionId = InCell->GetProvenanceCellTransitionId();
 	if (TransitionId != 0)
 	{
-		const EWorldPartitionRuntimeCellState TargetState = InCell->GetProvenanceCellTransitionTarget();
-		const bool bCompleted = TargetState == EWorldPartitionRuntimeCellState::Loaded;
+		const EWorldPartitionRuntimeCellState TransitionTargetState = InCell->GetProvenanceCellTransitionTarget();
+		const bool bCompleted = TransitionTargetState == EWorldPartitionRuntimeCellState::Loaded;
 		RecordCellTransitionEvent(
 			bCompleted ? UE::RHI::ResourceProvenance::EOperation::CellStateCompleted : UE::RHI::ResourceProvenance::EOperation::CellStateProgress,
 			TransitionId,
 			InCell,
 			EWorldPartitionRuntimeCellState::Activated,
-			TargetState,
+			TransitionTargetState,
 			EWorldPartitionRuntimeCellState::Loaded,
 			ECellTransitionAction::Hide);
 		if (bCompleted)

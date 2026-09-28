@@ -21,7 +21,7 @@
 #include "UObject/FortniteMainBranchObjectVersion.h"
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-#include "Containers/StringBuilder.h"
+#include "Misc/StringBuilder.h"
 #include "RHIResourceProvenance.h"
 #endif
 
