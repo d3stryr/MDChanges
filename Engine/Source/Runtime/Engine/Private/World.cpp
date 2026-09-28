@@ -2034,16 +2034,17 @@ namespace
 		FReferenceChainSearch Search(
 			Collection,
 			EReferenceChainSearchMode::ExternalOnly | EReferenceChainSearchMode::Shortest);
-		FString RootPath = Search.GetRootPath(Collection);
+		const uint32 ChainCount = static_cast<uint32>(
+			FMath::Min(Search.GetReferenceChains().Num(), static_cast<int32>(MAX_uint16)));
+		FString RootPath = ChainCount != 0
+			? Search.GetRootPath()
+			: TEXT("<no external root path; target is not currently reachable>");
 		RootPath.ReplaceInline(TEXT("\r"), TEXT(" "));
 		RootPath.ReplaceInline(TEXT("\n"), TEXT(" "));
 		if (RootPath.IsEmpty())
 		{
-			RootPath = TEXT("<no external root path>");
+			RootPath = TEXT("<empty external root path>");
 		}
-
-		const uint32 ChainCount = static_cast<uint32>(
-			FMath::Min(Search.GetReferenceChains().Num(), static_cast<int32>(MAX_uint16)));
 		Resource->GameThread_RecordProvenanceTextEvent(
 			UE::RHI::ResourceProvenance::EOperation::MPCGCReferenceChain,
 			ChainCount,

@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [30cbc9fd4674d5b8262592757112f425bd6cb334](https://github.com/d3stryr/UnrealEngine/commit/30cbc9fd4674d5b8262592757112f425bd6cb334)
+- Source commit: [eee3540f6ea2a205f4556d212049d1581e2b3009](https://github.com/d3stryr/UnrealEngine/commit/eee3540f6ea2a205f4556d212049d1581e2b3009)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -29,7 +29,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `5f0b8def38a2b82258a898816e0dbc6a552fbc5f` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
 | `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
 | `Engine/Source/Runtime/Engine/Private/AssetManager.cpp` | `5b5bfe6ab907428555b350025f5849684479ac3c` | Modified | Records MPC primary-asset bundle requests, load completion handles, and unload state before managed handles are reset. |
-| `Engine/Source/Runtime/Engine/Private/World.cpp` | `ea31e9ec9e8b87ae466ccf591dfb273036a9b4e1` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
+| `Engine/Source/Runtime/Engine/Private/World.cpp` | `5f8644497acc2ecbb786048e7fe649071eab2d7e` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
 | `Engine/Source/Runtime/Engine/Classes/Engine/World.h` | `866f41cd9c1bf4009d4503b60bee347f79cc913d` | Modified | Registers a diagnostic pre-GC callback so MPC retention state can be compared before and after collection. |
 | `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `c799bed67b3df3e9a49ca935c1bbc0d42de601e8` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
 | `Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h` | `2d3862f28881e76987746750f72bef3c4fc60e0d` | Modified | Stores the bounded contributor ID used by cached MPC binding sidecars. |
@@ -487,6 +487,16 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
 - Documented the recommended PS5 Development launch string, trace settings, startup verification, capture checklist, decoder discovery flow, every supported relationship filter, responsibility-report workflow, evidence interpretation, coverage handling, and troubleshooting.
 - Engine commit: `30cbc9fd4674d5b8262592757112f425bd6cb334`.
 - Runbook source blob: `ede30c324283be0069a270646a28ad2f609450a6`.
+
+## 2026-09-28 — safe no-chain reference-path handling
+
+- A targeted reference search with no external root chain entered UE 5.8's `FReferenceChainSearch::GetRootPath(TargetObject)` fallback.
+- That fallback directly constructs `FGCObjectInfo`, whose lightweight constructor copies the object name but leaves its internal `Class` pointer null. Calling `FGCObjectInfo::GetFullName()` then asserts in `GetClassName()`; the valid `MPC_GlobalEnvironment` name observed in the debugger is therefore expected and is not evidence that the target pointer was null.
+- The targeted recorder now checks `GetReferenceChains().Num()` first. It calls the non-targeted `GetRootPath()` only when a fully populated chain exists and otherwise journals an explicit unreachable/no-external-root marker.
+- No CoreUObject behavior was modified; the fix is isolated to the diagnostic caller.
+- Engine commit: `eee3540f6ea2a205f4556d212049d1581e2b3009`.
+- Updated source blob: `Engine/Source/Runtime/Engine/Private/World.cpp` = `5f8644497acc2ecbb786048e7fe649071eab2d7e`.
+- This targeted repair has not yet been compiled with the PS5 SDK/toolchain.
 
 ## Next enhancement in sequence
 
