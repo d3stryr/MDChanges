@@ -1,6 +1,8 @@
 # Confidential RHI Provenance Analysis Prompt
 
-Use this prompt in an approved environment where the confidential crash artifacts can be attached. Prefer the original TSV files alongside Excel copies because Excel may round 64-bit resource IDs, addresses, correlations, and caller PCs beyond 15 digits.
+Use this prompt in an approved environment where the confidential crash artifacts can be attached. Supported inputs include `.tsv`, `.txt`, `.md`, and `.xlsx`. Prefer original decoder text data over Excel copies because Excel may round 64-bit resource IDs, addresses, correlations, and caller PCs beyond 15 digits.
+
+A `.txt` or `.md` file may contain unchanged tab-separated decoder output rather than prose or a Markdown table. Detect the format from the contents, parse tab-separated rows when present, and preserve all identifiers as text.
 
 ---
 
@@ -12,16 +14,16 @@ Do not browse the internet, upload the data elsewhere, or reproduce unrelated pr
 
 The attachments may include:
 
-- MPC discovery TSV/XLSX
-- Resource-generation ID TSV/XLSX
-- Responsibility report MD/XLSX
-- Binding TSV/XLSX
-- Contributor TSV/XLSX
-- Causal-chain TSV/XLSX
-- Scene-refresh TSV/XLSX
-- Data Layer transition TSV/XLSX
-- Runtime-cell transition TSV/XLSX
-- Primitive teardown TSV/XLSX
+- MPC discovery TSV/TXT/MD/XLSX
+- Resource-generation ID TSV/TXT/MD/XLSX
+- Responsibility report MD/TXT/XLSX
+- Binding TSV/TXT/MD/XLSX
+- Contributor TSV/TXT/MD/XLSX
+- Causal-chain TSV/TXT/MD/XLSX
+- Scene-refresh TSV/TXT/MD/XLSX
+- Data Layer transition TSV/TXT/MD/XLSX
+- Runtime-cell transition TSV/TXT/MD/XLSX
+- Primitive teardown TSV/TXT/MD/XLSX
 - PS5 log
 - Optional symbolized callstack/address report
 
@@ -46,6 +48,9 @@ Before analyzing:
 7. Treat hexadecimal addresses and all 64-bit identifiers as text.
 8. Report any suspected Excel precision loss before drawing conclusions.
 9. Do not merge different generations merely because they used the same resource address.
+10. Inspect file contents rather than trusting the extension: `.txt` and `.md` may contain raw tab-separated decoder rows.
+11. For decoder text output, preserve leading `# version=...` metadata and use the following tab-separated header row as the column definition.
+12. For an actual responsibility Markdown report, parse its headings, verdict, evidence lists, and coverage gaps as Markdown rather than TSV.
 
 ## Investigation objective
 

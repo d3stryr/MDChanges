@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [76b8f4a40520782ae45ff10a3b4f48517e728b24](https://github.com/d3stryr/UnrealEngine/commit/76b8f4a40520782ae45ff10a3b4f48517e728b24)
+- Source commit: [603a17c13eef12349ee8fd30d6c48f3d58f4a556](https://github.com/d3stryr/UnrealEngine/commit/603a17c13eef12349ee8fd30d6c48f3d58f4a556)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -25,7 +25,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
 | `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `14b0ea69d1b3f65ab21ff7f2906e510a79448b04` | Added | Filters journals and emits TSV with owners, command/binding IDs, causal IDs, GC state, and scene-refresh correlations. |
 | `RHI_RESOURCE_PROVENANCE_RUNBOOK.md` | `ede30c324283be0069a270646a28ad2f609450a6` | Added | Operational guide for PS5 launch settings, capture verification, journal retrieval, filtering, responsibility reports, interpretation, and troubleshooting. |
-| `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` | `c241ce29219ff0cc161cc5fcd0b08402535c63c3` | Added | Reusable confidential-environment prompt for joining generation, release, binding, contributor, command, World Partition, Data Layer, and coverage evidence. |
+| `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` | `429c9ee92b532c697f540ae0bd403c3d39366b0f` | Added | Reusable confidential-environment prompt for joining generation, release, binding, contributor, command, World Partition, Data Layer, and coverage evidence from TSV, TXT, Markdown, or Excel inputs. |
 | `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `318c4ccc86833bd24bc182002cab56a36296f664` | Modified | Adds path/release/fixed-event APIs and carries diagnostic causal IDs into render-thread MPC updates. |
 | `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `5f0b8def38a2b82258a898816e0dbc6a552fbc5f` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
 | `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
@@ -505,6 +505,13 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
 - The prompt validates TSV/Excel precision, keeps generation identities separate from reused addresses, reconstructs release and stale-use timelines, resolves binding/contributor/command responsibility, audits coverage, and produces a fixed evidence-cited verdict format.
 - Engine commit: `76b8f4a40520782ae45ff10a3b4f48517e728b24`.
 - Prompt source blob: `c241ce29219ff0cc161cc5fcd0b08402535c63c3`.
+
+## 2026-09-28 — TXT and Markdown analysis-input support
+
+- Updated `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` to accept `.tsv`, `.txt`, `.md`, and `.xlsx` artifacts.
+- The prompt now detects raw tab-separated decoder rows from content rather than file extension, preserves the leading journal metadata line and all 64-bit identifiers as text, and distinguishes raw decoder data from a true Markdown responsibility report.
+- Engine commit: `603a17c13eef12349ee8fd30d6c48f3d58f4a556`.
+- Updated prompt blob: `429c9ee92b532c697f540ae0bd403c3d39366b0f`.
 
 ## Next enhancement in sequence
 
