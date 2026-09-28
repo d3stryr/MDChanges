@@ -35,6 +35,13 @@ TMultiMap<FGuid, FMaterialParameterCollectionInstanceResource*> GDefaultMaterial
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 namespace
 {
+	bool IsMPCObjectAsyncLoading(const UObject* Object)
+	{
+		return Object && Object->HasAnyInternalFlags(
+			EInternalObjectFlags::AsyncLoadingPhase1 |
+			EInternalObjectFlags::AsyncLoadingPhase2);
+	}
+
 	uint32 BuildMPCAssetProvenanceState(const UMaterialParameterCollection* Collection)
 	{
 		if (!Collection)
@@ -50,7 +57,7 @@ namespace
 		State |= Collection->HasAnyFlags(RF_BeginDestroyed) ? 1u << 4 : 0u;
 		State |= Collection->HasAnyFlags(RF_FinishDestroyed) ? 1u << 5 : 0u;
 		State |= Collection->HasAnyFlags(RF_WasLoaded) ? 1u << 6 : 0u;
-		State |= Collection->HasAnyInternalFlags(EInternalObjectFlags::AsyncLoading) ? 1u << 7 : 0u;
+		State |= IsMPCObjectAsyncLoading(Collection) ? 1u << 7 : 0u;
 		State |= Collection->GetLinker() != nullptr ? 1u << 8 : 0u;
 		return State;
 	}
@@ -64,7 +71,7 @@ namespace
 			Collection ? *Collection->GetOutermost()->GetName() : TEXT("<null>"),
 			Collection ? *Collection->GetPrimaryAssetId().ToString() : TEXT("<null>"),
 			Collection && Collection->GetLinker() ? 1 : 0,
-			Collection && Collection->HasAnyInternalFlags(EInternalObjectFlags::AsyncLoading) ? 1 : 0);
+			IsMPCObjectAsyncLoading(Collection) ? 1 : 0);
 	}
 }
 #endif

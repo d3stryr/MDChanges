@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [5ee8593e36126a9022dc5f2589d1a7c5a2638531](https://github.com/d3stryr/UnrealEngine/commit/5ee8593e36126a9022dc5f2589d1a7c5a2638531)
+- Source commit: [4108687942aea39deb95673006558fc5911f1f5d](https://github.com/d3stryr/UnrealEngine/commit/4108687942aea39deb95673006558fc5911f1f5d)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -25,7 +25,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
 | `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `14b0ea69d1b3f65ab21ff7f2906e510a79448b04` | Added | Filters journals and emits TSV with owners, command/binding IDs, causal IDs, GC state, and scene-refresh correlations. |
 | `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `318c4ccc86833bd24bc182002cab56a36296f664` | Modified | Adds path/release/fixed-event APIs and carries diagnostic causal IDs into render-thread MPC updates. |
-| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `fd312932b954b47a958442ac4a03b78726a3acb2` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
+| `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `5f0b8def38a2b82258a898816e0dbc6a552fbc5f` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
 | `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
 | `Engine/Source/Runtime/Engine/Private/AssetManager.cpp` | `5b5bfe6ab907428555b350025f5849684479ac3c` | Modified | Records MPC primary-asset bundle requests, load completion handles, and unload state before managed handles are reset. |
 | `Engine/Source/Runtime/Engine/Private/World.cpp` | `fb79b3df63b135a8985ba15ec6dbc764a7f7af7e` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
@@ -432,6 +432,16 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
   - `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py`: `14b0ea69d1b3f65ab21ff7f2906e510a79448b04`
   - `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h`: `0c1b13751ff5eaf37ea109243970d8af4a95e886`
   - `Engine/Source/Runtime/Engine/Private/AssetManager.cpp`: `5b5bfe6ab907428555b350025f5849684479ac3c`
+
+## 2026-09-28 — UE 5.8 async-loading flag compile fix
+
+- PS5/UE 5.8.2 compilation reported that `EInternalObjectFlags::AsyncLoading` does not exist.
+- UE 5.8 represents async object loading with `AsyncLoadingPhase1` and `AsyncLoadingPhase2`.
+- Added `IsMPCObjectAsyncLoading` and changed both asset-state and text-event checks to test the two phase flags.
+- The packed provenance bit and decoded `async_loading` meaning are unchanged.
+- Engine commit: `4108687942aea39deb95673006558fc5911f1f5d`.
+- Updated source blob: `5f0b8def38a2b82258a898816e0dbc6a552fbc5f`.
+- This targeted correction has not yet been compiled with the PS5 SDK/toolchain.
 
 ## Next enhancement in sequence
 
