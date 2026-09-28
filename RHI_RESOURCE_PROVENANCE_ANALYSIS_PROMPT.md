@@ -1,8 +1,8 @@
 # Confidential RHI Provenance Analysis Prompt
 
-Use this prompt in an approved environment where the confidential crash artifacts can be attached. Supported inputs include `.tsv`, `.txt`, `.md`, and `.xlsx`. Prefer original decoder text data over Excel copies because Excel may round 64-bit resource IDs, addresses, correlations, and caller PCs beyond 15 digits.
+Use this prompt in an approved environment where the confidential crash artifacts can be attached. Supported inputs include `.tsv`, `.txt`, `.md`, `.json`, and `.xlsx`. Prefer original decoder output over Excel copies because Excel may round 64-bit resource IDs, addresses, correlations, and caller PCs beyond 15 digits.
 
-A `.txt` or `.md` file may contain unchanged tab-separated decoder output rather than prose or a Markdown table. Detect the format from the contents, parse tab-separated rows when present, and preserve all identifiers as text.
+A `.txt` or `.md` file may contain unchanged tab-separated decoder output rather than prose or a Markdown table. Detect the format from the contents, parse tab-separated rows when present, and preserve all identifiers as text. Native decoder `.json` files contain `metadata`, `columns`, `records`, and `summary`; treat every value as text even when it looks numeric.
 
 ---
 
@@ -14,16 +14,16 @@ Do not browse the internet, upload the data elsewhere, or reproduce unrelated pr
 
 The attachments may include:
 
-- MPC discovery TSV/TXT/MD/XLSX
-- Resource-generation ID TSV/TXT/MD/XLSX
+- MPC discovery TSV/TXT/MD/JSON/XLSX
+- Resource-generation ID TSV/TXT/MD/JSON/XLSX
 - Responsibility report MD/TXT/XLSX
-- Binding TSV/TXT/MD/XLSX
-- Contributor TSV/TXT/MD/XLSX
-- Causal-chain TSV/TXT/MD/XLSX
-- Scene-refresh TSV/TXT/MD/XLSX
-- Data Layer transition TSV/TXT/MD/XLSX
-- Runtime-cell transition TSV/TXT/MD/XLSX
-- Primitive teardown TSV/TXT/MD/XLSX
+- Binding TSV/TXT/MD/JSON/XLSX
+- Contributor TSV/TXT/MD/JSON/XLSX
+- Causal-chain TSV/TXT/MD/JSON/XLSX
+- Scene-refresh TSV/TXT/MD/JSON/XLSX
+- Data Layer transition TSV/TXT/MD/JSON/XLSX
+- Runtime-cell transition TSV/TXT/MD/JSON/XLSX
+- Primitive teardown TSV/TXT/MD/JSON/XLSX
 - PS5 log
 - Optional symbolized callstack/address report
 
@@ -51,6 +51,7 @@ Before analyzing:
 10. Inspect file contents rather than trusting the extension: `.txt` and `.md` may contain raw tab-separated decoder rows.
 11. For decoder text output, preserve leading `# version=...` metadata and use the following tab-separated header row as the column definition.
 12. For an actual responsibility Markdown report, parse its headings, verdict, evidence lists, and coverage gaps as Markdown rather than TSV.
+13. For native decoder JSON, parse the `records` array using the `columns` list as the canonical order, retain the `metadata` and `summary` objects, and do not coerce any string field to a floating-point number.
 
 ## Investigation objective
 

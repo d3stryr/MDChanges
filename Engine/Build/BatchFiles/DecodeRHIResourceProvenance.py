@@ -10,6 +10,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import struct
 import sys
@@ -961,6 +962,210 @@ def record_matches(
     return True
 
 
+OUTPUT_COLUMNS = (
+    "seconds",
+    "cycles",
+    "kind",
+    "operation",
+    "id",
+    "resource",
+    "flags_address",
+    "type",
+    "type_name",
+    "thread",
+    "packed",
+    "caller",
+    "correlation",
+    "binding_id",
+    "causal_id",
+    "parent_correlation",
+    "scene_refresh_id",
+    "contributor_id",
+    "data_layer_transition_id",
+    "cell_transition_id",
+    "primitive_teardown_id",
+    "owner_key",
+    "record_flags",
+    "detail",
+    "text",
+)
+
+
+def output_metadata(header: FileHeader) -> dict[str, str]:
+    # Keep every value textual so JSON consumers cannot round 64-bit values.
+    return {
+        "version": str(header.version),
+        "pointer_size": str(header.pointer_size),
+        "tchar_size": str(header.tchar_size),
+        "queue_capacity": str(header.queue_capacity),
+        "identity_capacity": str(header.identity_capacity),
+        "start_cycles": str(header.start_cycles),
+        "seconds_per_cycle": repr(header.seconds_per_cycle),
+        "maximum_file_bytes": str(header.maximum_file_bytes),
+    }
+
+
+def escape_markdown_cell(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
+def format_record_fields(record: Record, header: FileHeader) -> list[str]:
+    seconds = (record.cycles - header.start_cycles) * header.seconds_per_cycle
+    owner_key = 0
+    if record.operation == 20:  # AccessOwner stores its key as correlation.
+        owner_key = record.correlation_id
+    elif record.operation == 22:  # CommandOwner stores its key as caller.
+        owner_key = record.caller_address
+    elif record.operation == 28:  # BindingOwner stores its key as caller.
+        owner_key = record.caller_address
+    binding_id = (
+        record.caller_address
+        if record.operation == 68
+        else record.correlation_id
+        if 23 <= record.operation <= 29 or record.operation in (43, 51)
+        else 0
+    )
+    contributor_id = (
+        record.resource_id
+        if 66 <= record.operation <= 69
+        else record.caller_address
+        if record.operation == 51
+        else record.correlation_id
+        if 45 <= record.operation <= 50 or record.operation == 52
+        else 0
+    )
+    data_layer_transition_id = (
+        record.correlation_id if 53 <= record.operation <= 57 else 0
+    )
+    cell_transition_id = (
+        record.correlation_id if 59 <= record.operation <= 64 else 0
+    )
+    primitive_teardown_id = (
+        record.correlation_id if 66 <= record.operation <= 69 else 0
+    )
+    causal_id = 0
+    parent_correlation = 0
+    if record.operation in (30, 31, 33):
+        causal_id = record.correlation_id
+    elif record.operation == 32:
+        causal_id = record.caller_address
+        parent_correlation = record.correlation_id
+    scene_refresh_id = (
+        record.correlation_id if 38 <= record.operation <= 41 else 0
+    )
+    return [
+        f"{seconds:.9f}",
+        str(record.cycles),
+        KIND_NAMES.get(record.kind, f"Unknown({record.kind})"),
+        OPERATION_NAMES.get(record.operation, f"Unknown({record.operation})"),
+        str(record.resource_id),
+        f"0x{record.resource_address:x}",
+        f"0x{record.flags_address:x}",
+        str(record.resource_type),
+        RESOURCE_TYPE_NAMES.get(
+            record.resource_type,
+            f"Unknown({record.resource_type})",
+        ),
+        str(record.thread_id),
+        f"0x{record.packed_value:08x}",
+        f"0x{record.caller_address:x}",
+        str(record.correlation_id),
+        str(binding_id),
+        str(causal_id),
+        str(parent_correlation),
+        str(scene_refresh_id),
+        str(contributor_id),
+        str(data_layer_transition_id),
+        str(cell_transition_id),
+        str(primitive_teardown_id),
+        f"0x{owner_key:x}",
+        f"0x{record.flags:04x}",
+        decode_packed_detail(record),
+        sanitize_tsv(record.text),
+    ]
+
+
+def write_output_preamble(
+    output_stream,
+    output_format: str,
+    header: FileHeader,
+) -> None:
+    metadata = output_metadata(header)
+    if output_format == "tsv":
+        print(
+            "# version={} pointer_size={} tchar_size={} queue_capacity={} "
+            "identity_capacity={} max_file_bytes={}".format(
+                header.version,
+                header.pointer_size,
+                header.tchar_size,
+                header.queue_capacity,
+                header.identity_capacity,
+                header.maximum_file_bytes,
+            ),
+            file=output_stream,
+        )
+        print("\t".join(OUTPUT_COLUMNS), file=output_stream)
+    elif output_format == "markdown":
+        print("# RHI Resource Provenance Decode", file=output_stream)
+        print("\n## Journal metadata\n", file=output_stream)
+        print("| Field | Value |", file=output_stream)
+        print("|---|---|", file=output_stream)
+        for name, value in metadata.items():
+            print(
+                f"| {escape_markdown_cell(name)} | "
+                f"{escape_markdown_cell(value)} |",
+                file=output_stream,
+            )
+        print("\n## Matched records\n", file=output_stream)
+        print(
+            "| " + " | ".join(OUTPUT_COLUMNS) + " |",
+            file=output_stream,
+        )
+        print(
+            "|" + "|".join("---" for _ in OUTPUT_COLUMNS) + "|",
+            file=output_stream,
+        )
+    else:
+        print("{", file=output_stream)
+        print('  "metadata": ', end="", file=output_stream)
+        json.dump(metadata, output_stream, ensure_ascii=False)
+        print(",", file=output_stream)
+        print('  "columns": ', end="", file=output_stream)
+        json.dump(list(OUTPUT_COLUMNS), output_stream, ensure_ascii=False)
+        print(",", file=output_stream)
+        print('  "records": [', file=output_stream)
+
+
+def write_output_epilogue(
+    output_stream,
+    output_format: str,
+    total: int,
+    matched: int,
+) -> None:
+    if output_format == "markdown":
+        print(
+            f"\nDecoded {total} records; matched {matched}.",
+            file=output_stream,
+        )
+    elif output_format == "json":
+        print("\n  ],", file=output_stream)
+        print('  "summary": ', end="", file=output_stream)
+        json.dump(
+            {
+                "total_records": str(total),
+                "matched_records": str(matched),
+            },
+            output_stream,
+            ensure_ascii=False,
+        )
+        print("\n}", file=output_stream)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("journal", type=pathlib.Path)
@@ -1020,11 +1225,23 @@ def main() -> int:
         action="store_true",
         help="Join the MPC lifecycle, release, binding, contributor, World Partition, and command evidence into a Markdown verdict. Requires --id.",
     )
+    parser.add_argument(
+        "--format",
+        choices=("tsv", "markdown", "json"),
+        default="tsv",
+        dest="output_format",
+        help="Format for decoded records: TSV (default), Markdown table, or JSON. Responsibility reports remain Markdown.",
+    )
     parser.add_argument("--output", type=pathlib.Path)
     args = parser.parse_args()
 
     if args.responsibility_report and args.resource_id is None:
         parser.error("--responsibility-report requires --id")
+    if args.responsibility_report and args.output_format == "json":
+        parser.error(
+            "--format json is not supported with --responsibility-report; "
+            "omit --format or use --format markdown"
+        )
 
     output_stream = (
         args.output.open("w", encoding="utf-8", newline="")
@@ -1045,30 +1262,11 @@ def main() -> int:
 
     matched = 0
     total = 0
+    first_json_record = True
     try:
         with args.journal.open("rb") as stream:
             header = read_file_header(stream)
-            print(
-                "# version={} pointer_size={} tchar_size={} queue_capacity={} "
-                "identity_capacity={} max_file_bytes={}".format(
-                    header.version,
-                    header.pointer_size,
-                    header.tchar_size,
-                    header.queue_capacity,
-                    header.identity_capacity,
-                    header.maximum_file_bytes,
-                ),
-                file=output_stream,
-            )
-            print(
-                "seconds\tcycles\tkind\toperation\tid\tresource\tflags_address"
-                "\ttype\ttype_name\tthread\tpacked\tcaller\tcorrelation"
-                "\tbinding_id\tcausal_id\tparent_correlation"
-                "\tscene_refresh_id\tcontributor_id\tdata_layer_transition_id"
-                "\tcell_transition_id\tprimitive_teardown_id"
-                "\towner_key\trecord_flags\tdetail\ttext",
-                file=output_stream,
-            )
+            write_output_preamble(output_stream, args.output_format, header)
 
             for record in iter_records(stream):
                 total += 1
@@ -1089,94 +1287,35 @@ def main() -> int:
                     continue
 
                 matched += 1
-                seconds = (
-                    (record.cycles - header.start_cycles)
-                    * header.seconds_per_cycle
-                )
-                owner_key = 0
-                if record.operation == 20:  # AccessOwner stores its key as correlation.
-                    owner_key = record.correlation_id
-                elif record.operation == 22:  # CommandOwner stores its key as caller.
-                    owner_key = record.caller_address
-                elif record.operation == 28:  # BindingOwner stores its key as caller.
-                    owner_key = record.caller_address
-                binding_id = (
-                    record.caller_address
-                    if record.operation == 68
-                    else record.correlation_id
-                    if 23 <= record.operation <= 29
-                    or record.operation in (43, 51)
-                    else 0
-                )
-                contributor_id = (
-                    record.resource_id
-                    if 66 <= record.operation <= 69
-                    else record.caller_address
-                    if record.operation == 51
-                    else record.correlation_id
-                    if 45 <= record.operation <= 50 or record.operation == 52
-                    else 0
-                )
-                data_layer_transition_id = (
-                    record.correlation_id
-                    if 53 <= record.operation <= 57
-                    else 0
-                )
-                cell_transition_id = (
-                    record.correlation_id
-                    if 59 <= record.operation <= 64
-                    else 0
-                )
-                primitive_teardown_id = (
-                    record.correlation_id
-                    if 66 <= record.operation <= 69
-                    else 0
-                )
-                causal_id = 0
-                parent_correlation = 0
-                if record.operation in (30, 31, 33):
-                    causal_id = record.correlation_id
-                elif record.operation == 32:
-                    causal_id = record.caller_address
-                    parent_correlation = record.correlation_id
-                scene_refresh_id = (
-                    record.correlation_id
-                    if 38 <= record.operation <= 41
-                    else 0
-                )
-                fields = [
-                    f"{seconds:.9f}",
-                    str(record.cycles),
-                    KIND_NAMES.get(record.kind, f"Unknown({record.kind})"),
-                    OPERATION_NAMES.get(
-                        record.operation, f"Unknown({record.operation})"
-                    ),
-                    str(record.resource_id),
-                    f"0x{record.resource_address:x}",
-                    f"0x{record.flags_address:x}",
-                    str(record.resource_type),
-                    RESOURCE_TYPE_NAMES.get(
-                        record.resource_type,
-                        f"Unknown({record.resource_type})",
-                    ),
-                    str(record.thread_id),
-                    f"0x{record.packed_value:08x}",
-                    f"0x{record.caller_address:x}",
-                    str(record.correlation_id),
-                    str(binding_id),
-                    str(causal_id),
-                    str(parent_correlation),
-                    str(scene_refresh_id),
-                    str(contributor_id),
-                    str(data_layer_transition_id),
-                    str(cell_transition_id),
-                    str(primitive_teardown_id),
-                    f"0x{owner_key:x}",
-                    f"0x{record.flags:04x}",
-                    decode_packed_detail(record),
-                    sanitize_tsv(record.text),
-                ]
-                print("\t".join(fields), file=output_stream)
+                fields = format_record_fields(record, header)
+                if args.output_format == "tsv":
+                    print("\t".join(fields), file=output_stream)
+                elif args.output_format == "markdown":
+                    print(
+                        "| "
+                        + " | ".join(
+                            escape_markdown_cell(value) for value in fields
+                        )
+                        + " |",
+                        file=output_stream,
+                    )
+                else:
+                    if not first_json_record:
+                        print(",", file=output_stream)
+                    print("    ", end="", file=output_stream)
+                    json.dump(
+                        dict(zip(OUTPUT_COLUMNS, fields)),
+                        output_stream,
+                        ensure_ascii=False,
+                    )
+                    first_json_record = False
+
+            write_output_epilogue(
+                output_stream,
+                args.output_format,
+                total,
+                matched,
+            )
     finally:
         if args.output:
             output_stream.close()

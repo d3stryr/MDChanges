@@ -103,6 +103,26 @@ py -3 $Decoder --help
 
 The decoder accepts decimal or `0x` hexadecimal identifiers and addresses.
 
+### Output formats
+
+Normal decoded records support three output formats:
+
+- `--format tsv` is the default and preserves the existing tab-separated output.
+- `--format markdown` writes journal metadata plus a real escaped Markdown table that can be uploaded directly as `.md`.
+- `--format json` writes `metadata`, `columns`, `records`, and `summary` objects. Numeric identifiers, cycle values, addresses, correlations, and caller PCs remain strings so JSON consumers cannot lose 64-bit precision.
+
+Examples:
+
+```powershell
+py -3 $Decoder $Journal --id 1047167 `
+  --format markdown --output ".\MPC-generation-1047167.md"
+
+py -3 $Decoder $Journal --id 1047167 `
+  --format json --output ".\MPC-generation-1047167.json"
+```
+
+All existing filters work with all three formats. `--responsibility-report` already produces Markdown; use its default behavior or `--format markdown`. It intentionally rejects `--format json`.
+
 ## Recommended filtering workflow
 
 ### Step 1: discover the target generation
