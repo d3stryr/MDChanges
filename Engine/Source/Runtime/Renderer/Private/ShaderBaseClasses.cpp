@@ -14,7 +14,6 @@
 #include "Materials/MaterialInterface.h"
 #include "PrimitiveSceneProxy.h"
 #include "RHIResourceProvenance.h"
-#include "Containers/StringBuilder.h"
 
 IMPLEMENT_TYPE_LAYOUT(FMaterialShader);
 IMPLEMENT_TYPE_LAYOUT(FMeshMaterialShader);
@@ -307,8 +306,7 @@ static FMaterialParameterCollectionAccessProvenance RecordMaterialParameterColle
 		const FString PrimitiveLevel = PrimitiveSceneProxy
 			? PrimitiveSceneProxy->GetLevelName().ToString()
 			: TEXT("<immediate>");
-		TStringBuilder<768> OwnerText;
-		OwnerText.Appendf(
+		const FString OwnerText = FString::Printf(
 			TEXT("owner_key=0x%llx source=%s material=%s render_proxy=%s collection_guid=%s primitive_owner=%s primitive_resource=%s primitive_level=%s mesh_context=%s"),
 			static_cast<unsigned long long>(OwnerKey),
 			Source,
@@ -324,7 +322,7 @@ static FMaterialParameterCollectionAccessProvenance RecordMaterialParameterColle
 			ResourceId,
 			UniformBuffer,
 			OwnerKey,
-			OwnerText.ToString(),
+			*OwnerText,
 			UE::RHI::ResourceProvenance::CaptureCallerAddress());
 	}
 

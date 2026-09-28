@@ -328,7 +328,19 @@ Data Layer transition
 
 Only declare this causal if the IDs and ordered events connect. Temporal proximity alone is insufficient.
 
-### I. Audit coverage
+### I. Validate the teardown fix
+
+For captures made after the cached-MPC teardown fix, verify that every binding in the release snapshot receives an invalidation/release before the retired resource reaches `FinalRelease`. Treat any of the following as a regression or coverage failure:
+
+- `ReleaseBindingCoverage` reports a nonzero omitted count;
+- the snapshot count is suspiciously fixed at 16;
+- a live binding has no later `BindingInvalidate`/`BindingRelease`;
+- `BindingSubmit` or `CommandExecute` targets the retired generation after `PhysicalFree`;
+- an ownership/contributor row required for the verdict has `record_flags & 0x0001`.
+
+The failure banner prints at most 256 binding rows by design. Use the journal—not the banner—to enumerate the complete process-wide binding table snapshot.
+
+### J. Audit coverage
 
 Inspect the responsibility report, PS5 log, and all coverage operations:
 

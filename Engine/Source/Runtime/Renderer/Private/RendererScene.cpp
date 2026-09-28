@@ -791,6 +791,44 @@ void FScene::UpdateParameterCollections(const TArray<FMaterialParameterCollectio
 		// Async RDG tasks can call FMaterialShader::SetParameters which touch material parameter collections.
 		FRDGBuilder::WaitForAsyncExecuteTask();
 
+		// Cached mesh draw commands retain raw uniform-buffer pointers. Detect every
+		// scene MPC insertion, removal, or generation replacement, and keep replaced
+		// buffers alive until those commands have been invalidated and rebuilt.
+		bool bRefreshCachedMPCBindings = false;
+		TArray<FUniformBufferRHIRef> RetiredParameterCollectionBuffers;
+		for (FMaterialParameterCollectionInstanceResource* InstanceResource : InParameterCollections)
+		{
+			if (!InstanceResource)
+			{
+				continue;
+			}
+			FRHIUniformBuffer* NextUniformBuffer = InstanceResource->GetUniformBuffer();
+			const FUniformBufferRHIRef* PreviousUniformBuffer =
+				ParameterCollections.Find(InstanceResource->GetId());
+			if (NextUniformBuffer &&
+				(!PreviousUniformBuffer || PreviousUniformBuffer->GetReference() != NextUniformBuffer))
+			{
+				bRefreshCachedMPCBindings = true;
+			}
+		}
+		for (const TPair<FGuid, FUniformBufferRHIRef>& PreviousCollection : ParameterCollections)
+		{
+			FRHIUniformBuffer* NextUniformBuffer = nullptr;
+			for (FMaterialParameterCollectionInstanceResource* InstanceResource : InParameterCollections)
+			{
+				if (InstanceResource && InstanceResource->GetId() == PreviousCollection.Key)
+				{
+					NextUniformBuffer = InstanceResource->GetUniformBuffer();
+					break;
+				}
+			}
+			if (PreviousCollection.Value.GetReference() != NextUniformBuffer)
+			{
+				bRefreshCachedMPCBindings = true;
+				RetiredParameterCollectionBuffers.Add(PreviousCollection.Value);
+			}
+		}
+
 #if RHI_RESOURCE_PROVENANCE_ENABLED
 		auto PackCollectionIndexAndCount = [](int32 CollectionIndex, int32 CollectionCount)
 		{
@@ -886,6 +924,17 @@ void FScene::UpdateParameterCollections(const TArray<FMaterialParameterCollectio
 		{
 			FMaterialParameterCollectionInstanceResource* InstanceResource = InParameterCollections[CollectionIndex];
 			ParameterCollections.Add(InstanceResource->GetId(), InstanceResource->GetUniformBuffer());
+		}
+
+		if (bRefreshCachedMPCBindings && Primitives.Num() > 0)
+		{
+			// Rebuild while RetiredParameterCollectionBuffers still owns every replaced
+			// generation. Removal records BindingInvalidate before the last owning RHI
+			// reference can be released; recache resolves the new scene MPC map.
+			FPrimitiveSceneInfo::UpdateStaticMeshes(
+				this,
+				MakeArrayView(Primitives),
+				EUpdateStaticMeshFlags::AllCommands);
 		}
 	});
 }

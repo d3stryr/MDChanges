@@ -10,6 +10,31 @@ This runbook describes how to launch a Development PS5 build with the MPC/RHI pr
 - Ensure the devkit has room for the journal and Unreal Insights trace. The journal is capped at 10 GiB with the recommended settings.
 - The instrumentation is compiled out of Test and Shipping.
 
+## PS5 Development symbols
+
+Build the exact executable used for the repro with full debug information and a linker map. In the game target constructor, keep this diagnostic-only block:
+
+```csharp
+if (Target.Platform == UnrealTargetPlatform.PS5 &&
+    Target.Configuration == UnrealTargetConfiguration.Development)
+{
+    bForceDebugInfo = true;
+    DebugInfo = DebugInfoMode.Full;
+    bDisableDebugInfoForGeneratedCode = false;
+    bCreateMapFile = true;
+    bAllowRuntimeSymbolFiles = true;
+    bPublicSymbolsByDefault = true;
+}
+```
+
+Equivalent UBT switches for a one-off build are:
+
+```text
+-ForceDebugInfo -DebugInfo=Full -MapFile -PublicSymbolsByDefault
+```
+
+`bUsePDBFiles` is a Visual C++ setting and is not the PS5 symbol switch. Preserve the exact staged `eboot.bin`, linker map, Prospero symbol/debug artifacts, packaged build manifest, and build identifier together. Load that exact executable and its matching symbols in the Prospero debugger/Rider before resolving `caller` and `StackFrame` PCs. Never symbolize a capture with artifacts from a later incremental build.
+
 ## Recommended launch parameters
 
 Paste the following into Project Launcher's **Additional Command Line Parameters** field:
@@ -315,6 +340,21 @@ returns only rows matching both conditions. Run relationship filters separately 
 
 `--responsibility-report` is different: it requires `--id`, scans the full journal in bounded passes, and follows related binding, contributor, teardown, cell, and Data Layer identifiers automatically.
 
+## Validate the MPC teardown fix
+
+The diagnostic branch now keeps cached-binding state in a process-wide 262,144-entry table instead of a 16-entry array per resource. A release snapshot scans that table and journals every live binding for the released generation. The crash log remains capped to 256 printed bindings to avoid recursively destabilizing the failure path; the `.rhiprov` journal is the complete source.
+
+After the next repro, verify:
+
+- `ReleaseBindingCoverage` reports `omitted_bindings=0`;
+- the active binding count is no longer capped at 16;
+- `SceneMapRemove` or `SceneMapReplaceOld` is followed by `BindingInvalidate` and `BindingRelease` rows for the retired generation;
+- rebuilt bindings refer to the replacement resource generation;
+- no later `BindingSubmit` or `CommandExecute` targets the retired generation;
+- `record_flags` does not contain the text-truncated bit for the owner/contributor rows used in the verdict.
+
+The scene keeps replaced uniform buffers alive while all cached raster/ray-tracing mesh commands are invalidated and rebuilt against the new MPC map. Only after recache completes can the retained old references leave scope.
+
 ## Responsibility interpretation
 
 | Question | Primary evidence |
@@ -358,7 +398,9 @@ returns only rows matching both conditions. Run relationship filters separately 
 
 ### Decoder reports a truncated record
 
-The final record may not have been completely written if the process terminated before the failure flush completed. Preserve the original file, check `failure_flush`, and use an earlier complete journal if available.
+The final binary record may not have been completely written if the process terminated before the failure flush completed. Preserve the original file, check `failure_flush`, and use an earlier complete journal if available.
+
+The journal text payload is now 2,048 characters, compact retained names/paths were expanded, and provenance builders use dynamic `FString` formatting. `record_flags & 0x0001` still explicitly marks an exceptionally long value that exceeded the bounded crash-safe journal record; do not treat such a row as a complete owner label.
 
 ## Minimal handoff package
 

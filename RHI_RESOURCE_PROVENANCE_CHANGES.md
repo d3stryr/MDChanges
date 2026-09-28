@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [0111b31b8486134947613d6980d3619bc0ecefdb](https://github.com/d3stryr/UnrealEngine/commit/0111b31b8486134947613d6980d3619bc0ecefdb)
+- Source commit: [695161b9edd1440c294cb955decdc34aa9e2fc0e](https://github.com/d3stryr/UnrealEngine/commit/695161b9edd1440c294cb955decdc34aa9e2fc0e)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -18,29 +18,29 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 |---|---|---|---|
 | `Engine/Source/Runtime/RHI/RHI.Build.cs` | `c59a8c678f0c4d162b9568a695c7170356db62bc` | Modified | Defines `RHI_RESOURCE_PROVENANCE_ENABLED` for Debug, DebugGame, and Development; disables it for Test and Shipping. |
 | `Engine/Source/Runtime/RHI/Public/RHIResourceProvenance.h` | `f86f40c258b6dc9daf9644bcaa9f1736929b2512` | Added | Non-production recorder interface, operation types, caller capture, metadata identity fields, owner tokens, command correlation, cached-binding lineage, and causal/ownership timelines. |
-| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `fec9125ea8af7a45a8915c0613dba1f0021b87d5` | Added | Bounded recorder, retained identities, journal, access/release owners, deduplicated generation-safe bindings, GC state, and scene-map timelines. |
+| `Engine/Source/Runtime/RHI/Private/RHIResourceProvenance.cpp` | `d417bb1a2028eba5eccb61b6bef690ad0216a7ca` | Added | Bounded recorder with a 262,144-entry global binding-state table, full release snapshots, enlarged text/name retention, journals, identities, owners, command correlation, GC state, and causal timelines. |
 | `Engine/Source/Runtime/RHI/Public/RHIResources.h` | `6b37d78d0848edad480d40348d35ef391f708717` | Modified | Instruments AddRef, Release, deletion transitions, generation IDs, name/owner capture, and compact typed provenance events. |
 | `Engine/Source/Runtime/RHI/Private/RHIResources.cpp` | `54eda7f84d693f3f6aa57e562ab87086571df865` | Modified | Registers identities, records destruction/delete completion, and copies available resource names. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandList.h` | `99c46d15e33b82159689efbb914614970163bf27` | Modified | Adds optional request/command correlation for shader resources, static uniform buffers, and uniform-buffer updates. |
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
 | `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `6c900a40efc4d5e8d865b897c6cba4a8eb2ab3d0` | Added | Filters journals by generation, address, owner key, collection GUID, and causal relationships; emits precision-safe TSV, escaped Markdown tables, or JSON. |
-| `RHI_RESOURCE_PROVENANCE_RUNBOOK.md` | `86a98ad58531fb8f8232ddc5f5f8e271c7eb2c3c` | Added | Operational guide for PS5 launch settings, capture verification, owner/GUID discovery, journal filtering, TSV/Markdown/JSON exports, responsibility reports, interpretation, and troubleshooting. |
-| `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` | `b23ae2b02fa5ff6bdf1361b181e69c56b4ce737c` | Added | Reusable confidential-environment prompt for joining generation, exact owner-key and collection-GUID evidence, release, binding, contributor, command, World Partition, Data Layer, and coverage data. |
+| `RHI_RESOURCE_PROVENANCE_RUNBOOK.md` | `124d7d9de07ec8729f0c6eb95258660b97dd45b1` | Added | Operational guide for PS5 symbol generation, launch settings, capture verification, owner/GUID discovery, filtering, teardown-fix validation, exports, reports, and troubleshooting. |
+| `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` | `a4ca302507ff7c9a1ec8c94194ce8e24960fae3c` | Added | Confidential analysis prompt with exact owner/GUID joins, teardown-fix regression checks, release/binding/contributor/command evidence, World Partition/Data Layer analysis, and coverage auditing. |
 | `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `318c4ccc86833bd24bc182002cab56a36296f664` | Modified | Adds path/release/fixed-event APIs and carries diagnostic causal IDs into render-thread MPC updates. |
 | `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `5f0b8def38a2b82258a898816e0dbc6a552fbc5f` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
 | `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
 | `Engine/Source/Runtime/Engine/Private/AssetManager.cpp` | `5b5bfe6ab907428555b350025f5849684479ac3c` | Modified | Records MPC primary-asset bundle requests, load completion handles, and unload state before managed handles are reset. |
 | `Engine/Source/Runtime/Engine/Private/World.cpp` | `5f8644497acc2ecbb786048e7fe649071eab2d7e` | Modified | Records bounded pre/post-GC MPC state and the exact invalid-collection removal transition. |
 | `Engine/Source/Runtime/Engine/Classes/Engine/World.h` | `866f41cd9c1bf4009d4503b60bee347f79cc913d` | Modified | Registers a diagnostic pre-GC callback so MPC retention state can be compared before and after collection. |
-| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `c799bed67b3df3e9a49ca935c1bbc0d42de601e8` | Modified | Captures immutable actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
+| `Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp` | `0b956911ce967f9e338dc8b41f7400d2891910de` | Modified | Captures dynamically formatted actor, component, runtime-cell, and Data Layer contributor descriptors before the proxy crosses to the render thread. |
 | `Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h` | `2d3862f28881e76987746750f72bef3c4fc60e0d` | Modified | Stores the bounded contributor ID used by cached MPC binding sidecars. |
-| `Engine/Source/Runtime/Engine/Private/WorldPartition/DataLayer/WorldDataLayers.cpp` | `e79211475c720f8abe604b2cda6b15c47b837afa` | Modified | Records bounded target/effective Data Layer state transitions and rejected/no-op requests. |
+| `Engine/Source/Runtime/Engine/Private/WorldPartition/DataLayer/WorldDataLayers.cpp` | `3b8f2472b3cddb854337a803290d263c52e5e65a` | Modified | Records bounded target/effective Data Layer state transitions and rejected/no-op requests without intermediate fixed-string truncation. |
 | `Engine/Source/Runtime/Engine/Public/WorldPartition/WorldPartitionRuntimeCell.h` | `586785e1737d5fb07cec4814ff565088e45cddbe` | Modified | Carries the game-thread runtime-cell transition ID and requested terminal state across asynchronous streaming callbacks. |
 | `Engine/Source/Runtime/Engine/Private/WorldPartition/WorldPartitionStreamingPolicy.cpp` | `96488dd95a741ce5ee390edbb3f3b25bb9aba4e3` | Modified | Records cell load, activate, deactivate, unload requests, accepted/blocked outcomes, visibility progress, completion, and supersession. |
 | `Engine/Source/Runtime/Engine/Private/WorldPartition/WorldPartitionSubsystem.cpp` | `92c6a0f1f0519befc77de393ddf0de6aee83c943` | Modified | Confirms runtime-cell progress/completion/failure from dynamic level-streaming state callbacks. |
-| `Engine/Source/Runtime/Renderer/Private/ShaderBaseClasses.cpp` | `44db3805437fe2dbe14f96e8080d9dc91f62151a` | Modified | Captures material, render proxy, primitive owner/resource/level labels and writes owner plus exact MPC generation into cached bindings. |
+| `Engine/Source/Runtime/Renderer/Private/ShaderBaseClasses.cpp` | `e2852373f8b38a8c404c51dc42f0434c46f1ae00` | Modified | Captures material/render-proxy/collection/primitive ownership with dynamic text formatting and writes owner plus exact MPC generation into cached bindings. |
 | `Engine/Source/Runtime/Renderer/Public/MaterialShader.h` | `73a09ee6afb8a11792b8ccd8f0517707fa497c4b` | Modified | Carries optional mesh context into diagnostic MPC binding-owner capture without changing existing callers. |
-| `Engine/Source/Runtime/Renderer/Private/RendererScene.cpp` | `529b41fd41f8b0d8f60efb3923ee5878d7fb7913` | Modified | Audits exact scene MPC-map inserts, removals, and old/new replacement generations without labeling unchanged entries. |
+| `Engine/Source/Runtime/Renderer/Private/RendererScene.cpp` | `37a05edfc114b9eccb8cf821c221f1e39eae995b` | Modified | Audits scene MPC-map mutations and retains replaced buffers while cached raster/ray-tracing mesh commands are invalidated and rebuilt against the new map. |
 | `Engine/Source/Runtime/Renderer/Public/MeshDrawShaderBindings.h` | `888a28918e6171e25eae3f1553a4c6e52798fac3` | Modified | Carries copied owner and exact resource-generation sidecars beside each diagnostic uniform-buffer binding. |
 | `Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h` | `95ccc6f9c386b0d62ce18b5c3540e322c13a4fcf` | Modified | Adds a diagnostic binding-lineage ID and explicit cached-command invalidation entry point. |
 | `Engine/Source/Runtime/Renderer/Private/MeshPassProcessor.cpp` | `b8173b1af6d6c217134e1875e5b5502007730241` | Modified | Records targeted binding create/copy/move/submit/invalidate/release events using retained generation IDs. |
@@ -175,7 +175,7 @@ These limits intentionally bound memory and disk use. Event overwrites, active-t
 - Bound capture to 65,536 teardown correlations by default with `r.RHI.ResourceProvenance.MaxPrimitiveTeardowns`; first omission and aggregate assertion coverage are explicit.
 - Add TSV `primitive_teardown_id`, bridge detail decoding, and `--primitive-teardown <id>` filtering. Existing `--binding` and `--contributor` filters also recognize teardown bridge rows.
 - Python syntax, a synthetic contributor/binding/teardown join filter, delimiter/preprocessor balance, operation/declaration wiring, and source-blob checks passed. No PS5 SDK compile has been run.
-- Source commit: [0111b31b8486134947613d6980d3619bc0ecefdb](https://github.com/d3stryr/UnrealEngine/commit/0111b31b8486134947613d6980d3619bc0ecefdb)
+- Source commit: [695161b9edd1440c294cb955decdc34aa9e2fc0e](https://github.com/d3stryr/UnrealEngine/commit/695161b9edd1440c294cb955decdc34aa9e2fc0e)
 
 ### 2026-09-25 — Feature 8: bounded runtime-cell streaming transition timeline
 
@@ -538,6 +538,25 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
 - Runbook blob: `86a98ad58531fb8f8232ddc5f5f8e271c7eb2c3c`.
 - Analysis-prompt blob: `b23ae2b02fa5ff6bdf1361b181e69c56b4ce737c`.
 - Validation: Python compilation, CLI-help exposure, owner-key carrier matching, GUID normalization, invalid-GUID rejection, and output-column assertions passed.
+
+## 2026-09-28 — full binding snapshots and cached-MPC teardown fix
+
+- Replaced the 16-entry per-resource binding-state array with a process-wide 262,144-entry open-addressed table and a 1,024-slot probe bound. A single retained MPC generation can now enumerate all 7,618 observed bindings without multiplying that capacity across 4,096 priority identities.
+- `RecordReleaseCause` scans the global table and emits one `ReleaseBindingSnapshot` for every live binding. The crash banner prints at most 256 rows, but reports the complete active count; the journal is authoritative.
+- Increased the journal queue from 16,384 to 32,768 records, text payloads from 256 to 2,048 characters, compact names from 64 to 128, and compact paths from 96 to 256.
+- Replaced fixed 768/1,024-character provenance builders in material ownership, primitive contributors, and Data Layer transitions with dynamic `FString::Printf` formatting. Oversized journal text remains explicitly marked by `record_flags & 0x0001` rather than silently trusted.
+- `FScene::UpdateParameterCollections` now detects every MPC insertion/removal/replacement, retains replaced buffers, installs the new map, rebuilds all cached raster and ray-tracing mesh commands, and only then releases retired references. Binding removal records `BindingInvalidate`/`BindingRelease` before the old generation can reach final release.
+- Added exact PS5 Development symbol settings (`DebugInfoMode.Full`, forced debug info, map generation, runtime symbol files, and public symbols) plus artifact-matching instructions.
+- Validation: structural balance checks passed for all modified translation units, and a compiled C++ simulation completed create/submit/invalidate/release for 7,618 bindings with zero omissions and zero live bindings after teardown.
+- Engine commit: `695161b9edd1440c294cb955decdc34aa9e2fc0e`.
+- RHI recorder blob: `d417bb1a2028eba5eccb61b6bef690ad0216a7ca`.
+- Renderer scene blob: `37a05edfc114b9eccb8cf821c221f1e39eae995b`.
+- Shader ownership blob: `e2852373f8b38a8c404c51dc42f0434c46f1ae00`.
+- Primitive contributor blob: `0b956911ce967f9e338dc8b41f7400d2891910de`.
+- Data Layer blob: `3b8f2472b3cddb854337a803290d263c52e5e65a`.
+- Runbook blob: `124d7d9de07ec8729f0c6eb95258660b97dd45b1`.
+- Analysis prompt blob: `a4ca302507ff7c9a1ec8c94194ce8e24960fae3c`.
+- This revision still requires compilation and runtime validation with the licensed PS5 SDK/toolchain.
 
 ## Next enhancement in sequence
 

@@ -30,7 +30,6 @@
 #include "Streaming/SimpleStreamableAssetManager.h"
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-#include "Misc/StringBuilder.h"
 #include "GameFramework/Actor.h"
 #include "Engine/Level.h"
 #include "RHIResourceProvenance.h"
@@ -414,8 +413,7 @@ namespace
 
 		if (OwnerActor)
 		{
-			TStringBuilder<1024> ActorText;
-			ActorText.Appendf(
+			const FString ActorText = FString::Printf(
 				TEXT("spatially_loaded=%u spatial_state_known=%u actor_data_layers=%u has_runtime_cell=%u actor=%s"),
 				static_cast<uint32>(bIsSpatiallyLoaded),
 				static_cast<uint32>(RuntimeCellObject != nullptr),
@@ -431,14 +429,13 @@ namespace
 				ContributorId,
 				OwnerActor,
 				PackedActor,
-				ActorText.ToString(),
+				*ActorText,
 				CaptureCallerAddress());
 		}
 
 		if (ProxyDesc.Component)
 		{
-			TStringBuilder<1024> ComponentText;
-			ComponentText.Appendf(
+			const FString ComponentText = FString::Printf(
 				TEXT("owner=%s resource=%s level=%s component=%s"),
 				*Proxy->GetOwnerName().ToString(),
 				*Proxy->GetResourceName().ToString(),
@@ -449,7 +446,7 @@ namespace
 				ContributorId,
 				ProxyDesc.Component,
 				0,
-				ComponentText.ToString(),
+				*ComponentText,
 				CaptureCallerAddress());
 		}
 
@@ -459,8 +456,7 @@ namespace
 				? RuntimeCellObject->GetGuid()
 				: FGuid();
 
-			TStringBuilder<1024> CellText;
-			CellText.Appendf(
+			const FString CellText = FString::Printf(
 				TEXT("guid=%s level_package=%s external_data_layer=%s cell_data_layers=%u cell=%s"),
 				*CellGuid.ToString(EGuidFormats::DigitsWithHyphens),
 				*RuntimeCell->GetLevelPackageName().ToString(),
@@ -472,7 +468,7 @@ namespace
 				ContributorId,
 				RuntimeCell->_getUObject(),
 				FMath::Min<uint32>(CellDataLayerInstances.Num(), MAX_uint16),
-				CellText.ToString(),
+				*CellText,
 				CaptureCallerAddress());
 		}
 
@@ -488,8 +484,7 @@ namespace
 			const EDataLayerRuntimeState EffectiveRuntimeState = bRuntime
 				? Entry.Instance->GetEffectiveRuntimeState()
 				: EDataLayerRuntimeState::Unloaded;
-			TStringBuilder<1024> DataLayerText;
-			DataLayerText.Appendf(
+			const FString DataLayerText = FString::Printf(
 				TEXT("full_name=%s runtime=%u runtime_state=%s effective_runtime_state=%s actor_member=%u cell_member=%u data_layer=%s"),
 				*Entry.Instance->GetDataLayerFullName(),
 				static_cast<uint32>(bRuntime),
@@ -506,7 +501,7 @@ namespace
 				ContributorId,
 				Entry.Instance,
 				PackedDataLayer,
-				DataLayerText.ToString(),
+				*DataLayerText,
 				CaptureCallerAddress());
 		}
 

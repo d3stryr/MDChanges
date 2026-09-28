@@ -21,7 +21,6 @@
 #include "UObject/FortniteMainBranchObjectVersion.h"
 
 #if RHI_RESOURCE_PROVENANCE_ENABLED
-#include "Misc/StringBuilder.h"
 #include "RHIResourceProvenance.h"
 #endif
 
@@ -279,8 +278,7 @@ bool AWorldDataLayers::SetDataLayerRuntimeState(const UDataLayerInstance* InData
 		InDataLayerInstance->IsClientOnly(),
 		InDataLayerInstance->IsServerOnly(),
 		GetNetMode());
-	TStringBuilder<1024> ProvenanceRequestText;
-	ProvenanceRequestText.Appendf(
+	const FString ProvenanceRequestText = FString::Printf(
 		TEXT("world=%s parent=%s full_name=%s data_layer=%s"),
 		*GetPathNameSafe(GetWorld()),
 		*GetPathNameSafe(InDataLayerInstance->GetParent()),
@@ -291,7 +289,7 @@ bool AWorldDataLayers::SetDataLayerRuntimeState(const UDataLayerInstance* InData
 		ProvenanceTransitionId,
 		InDataLayerInstance,
 		ProvenanceRequestState,
-		ProvenanceRequestText.ToString());
+		*ProvenanceRequestText);
 #endif
 
 	ESetDataLayerRuntimeStateError Reason;
@@ -553,8 +551,7 @@ void AWorldDataLayers::ResolveEffectiveRuntimeState(const UDataLayerInstance* In
 			EffectiveTransitionId =
 				UE::RHI::ResourceProvenance::AllocateDataLayerTransitionId();
 		}
-		TStringBuilder<768> EffectiveTransitionText;
-		EffectiveTransitionText.Appendf(
+		const FString EffectiveTransitionText = FString::Printf(
 			TEXT("origin=%s world=%s parent=%s full_name=%s data_layer=%s"),
 			GCurrentDataLayerProvenanceTransitionId != 0
 				? TEXT("target_state_request")
@@ -576,7 +573,7 @@ void AWorldDataLayers::ResolveEffectiveRuntimeState(const UDataLayerInstance* In
 				bDataLayerClientOnly,
 				bDataLayerServerOnly,
 				NetMode),
-			EffectiveTransitionText.ToString());
+			*EffectiveTransitionText);
 #endif
 
 		if (bInNotifyChange)

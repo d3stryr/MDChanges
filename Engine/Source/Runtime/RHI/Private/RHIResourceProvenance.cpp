@@ -31,8 +31,8 @@ namespace
 	static constexpr uint32 DestroyedIdentityCapacity = 32768;
 	static constexpr uint32 IdentityProbeLimit = 512;
 	static constexpr uint64 ReservedIdentityId = MAX_uint64;
-	static constexpr uint32 NameCapacity = 64;
-	static constexpr uint32 PathCapacity = 96;
+	static constexpr uint32 NameCapacity = 128;
+	static constexpr uint32 PathCapacity = 256;
 	static constexpr uint32 LifecycleEventsPerIdentity = 8;
 	static constexpr uint32 PriorityIdentityCapacity = 4096;
 	static constexpr uint32 PriorityIdentityProbeLimit = 64;
@@ -42,7 +42,13 @@ namespace
 	static constexpr uint32 PriorityOwnerPathCount = 4;
 	static constexpr uint32 PriorityAccessOwnerCount = 4;
 	static constexpr uint32 PriorityReleaseOwnerCount = 4;
-	static constexpr uint32 PriorityBindingStateCapacity = 16;
+	// Binding ids are process-unique but one binding can reference multiple MPC resources.
+	// Keep binding state in one global table instead of reserving a tiny array per identity.
+	// This preserves full release snapshots for scenes with thousands of cached commands
+	// without multiplying that capacity by PriorityIdentityCapacity.
+	static constexpr uint32 GlobalBindingStateCapacity = 262144;
+	static constexpr uint32 GlobalBindingStateProbeLimit = 1024;
+	static constexpr uint32 MaxFailureBindingDump = 256;
 	static constexpr uint32 ReferenceCensusCapacity = 32;
 	static constexpr uint32 AccessOwnerKeyCapacity = 64;
 	static constexpr uint32 StagedAccessOwnerCapacity = 16;
@@ -51,8 +57,8 @@ namespace
 	static constexpr uint32 BindingSubmitDedupCapacity = 65536;
 	static constexpr uint32 MaxSelectiveCommandStackCaptures = 256;
 	static constexpr uint32 MaxDumpEvents = 256;
-	static constexpr uint32 JournalQueueCapacity = 16384;
-	static constexpr uint32 JournalTextCapacity = 256;
+	static constexpr uint32 JournalQueueCapacity = 32768;
+	static constexpr uint32 JournalTextCapacity = 2048;
 	static constexpr uint32 JournalWriteBufferBytes = 256 * 1024;
 	static constexpr uint32 JournalPollMilliseconds = 50;
 	static constexpr uint32 JournalFlushMilliseconds = 2000;
@@ -62,6 +68,7 @@ namespace
 	static_assert((DestroyedIdentityCapacity & (DestroyedIdentityCapacity - 1)) == 0, "DestroyedIdentityCapacity must be a power of two.");
 	static_assert((PriorityIdentityCapacity & (PriorityIdentityCapacity - 1)) == 0, "PriorityIdentityCapacity must be a power of two.");
 	static_assert((PriorityAddressIndexCapacity & (PriorityAddressIndexCapacity - 1)) == 0, "PriorityAddressIndexCapacity must be a power of two.");
+	static_assert((GlobalBindingStateCapacity & (GlobalBindingStateCapacity - 1)) == 0, "GlobalBindingStateCapacity must be a power of two.");
 	static_assert((AccessOwnerKeyCapacity & (AccessOwnerKeyCapacity - 1)) == 0, "AccessOwnerKeyCapacity must be a power of two.");
 	static_assert((OwnerLabelCapacity & (OwnerLabelCapacity - 1)) == 0, "OwnerLabelCapacity must be a power of two.");
 	static_assert((CommandOwnerLinkCapacity & (CommandOwnerLinkCapacity - 1)) == 0, "CommandOwnerLinkCapacity must be a power of two.");
@@ -194,6 +201,13 @@ namespace
 		bool bSubmitted = false;
 	};
 
+	struct FGlobalBindingState
+	{
+		mutable std::atomic_flag Writer = ATOMIC_FLAG_INIT;
+		uint64 ResourceId = 0;
+		FPriorityBindingState State;
+	};
+
 	struct FReferenceCallsiteCensus
 	{
 		uint64 CallerAddress = 0;
@@ -227,7 +241,6 @@ namespace
 		uint32 ReleaseOwnerWriteIndex = 0;
 		TAtomicString<PathCapacity> ReleaseOwners[PriorityReleaseOwnerCount];
 		uint32 BindingStateOmitted = 0;
-		FPriorityBindingState BindingStates[PriorityBindingStateCapacity];
 		uint32 ReferenceCensusOmitted = 0;
 		bool bReferenceCensusJournaled = false;
 		FReferenceCallsiteCensus ReferenceCensus[ReferenceCensusCapacity];
@@ -930,6 +943,7 @@ namespace
 	FIdentity GIdentities[IdentityCapacity];
 	FIdentity GDestroyedIdentities[DestroyedIdentityCapacity];
 	FPriorityIdentity GPriorityIdentities[PriorityIdentityCapacity];
+	FGlobalBindingState GGlobalBindingStates[GlobalBindingStateCapacity];
 	FPriorityAddressEntry GPriorityAddressIndex[PriorityAddressIndexCapacity];
 	FOwnerLabel GOwnerLabels[OwnerLabelCapacity];
 	FCommandOwnerLink GCommandOwnerLinks[CommandOwnerLinkCapacity];
@@ -1179,6 +1193,26 @@ namespace
 	void UnlockPriorityIdentity(FPriorityIdentity& Identity)
 	{
 		Identity.Writer.clear(std::memory_order_release);
+	}
+
+	void LockGlobalBindingState(FGlobalBindingState& BindingState)
+	{
+		while (BindingState.Writer.test_and_set(std::memory_order_acquire))
+		{
+			FPlatformProcess::YieldThread();
+		}
+	}
+
+	void UnlockGlobalBindingState(FGlobalBindingState& BindingState)
+	{
+		BindingState.Writer.clear(std::memory_order_release);
+	}
+
+	uint64 MakeGlobalBindingKey(uint64 ResourceId, uint64 BindingId)
+	{
+		return BindingId ^ (
+			ResourceId + 0x9e3779b97f4a7c15ull +
+			(BindingId << 6) + (BindingId >> 2));
 	}
 
 	uint64 StoreOwnerLabel(const TCHAR* OwnerText)
@@ -1529,10 +1563,6 @@ namespace
 			ReleaseOwner.Set(nullptr);
 		}
 		ClaimedIdentity->BindingStateOmitted = 0;
-		for (FPriorityBindingState& BindingState : ClaimedIdentity->BindingStates)
-		{
-			BindingState = {};
-		}
 		ClaimedIdentity->ReferenceCensusOmitted = 0;
 		ClaimedIdentity->bReferenceCensusJournaled = false;
 		for (FReferenceCallsiteCensus& Census : ClaimedIdentity->ReferenceCensus)
@@ -2034,7 +2064,6 @@ namespace
 			TCHAR AccessOwners[PriorityAccessOwnerCount][PathCapacity] {};
 			TCHAR ReleaseOwners[PriorityReleaseOwnerCount][PathCapacity] {};
 			TCHAR LastCommandOwner[JournalTextCapacity] {};
-			FPriorityBindingState BindingStates[PriorityBindingStateCapacity] {};
 			Identity.DebugName.Get(DebugName);
 			Identity.OwnerName.Get(OwnerName);
 			Identity.OwnerPath.Get(OwnerPath);
@@ -2057,10 +2086,6 @@ namespace
 			const uint32 AccessOwnerOmitted = Identity.AccessOwnerOmitted;
 			const uint32 ReleaseOwnerWriteIndex = Identity.ReleaseOwnerWriteIndex;
 			const uint32 BindingStateOmitted = Identity.BindingStateOmitted;
-			for (uint32 BindingIndex = 0; BindingIndex < PriorityBindingStateCapacity; ++BindingIndex)
-			{
-				BindingStates[BindingIndex] = Identity.BindingStates[BindingIndex];
-			}
 			const uint64 LastCommandOwnerKey = Identity.LastCommandOwnerKey;
 			const uint64 LastCommandOwnerCorrelation = Identity.LastCommandOwnerCorrelation;
 			Identity.LastCommandOwner.Get(LastCommandOwner);
@@ -2145,13 +2170,34 @@ namespace
 			}
 
 			uint32 ActiveBindingCount = 0;
-			for (const FPriorityBindingState& BindingState : BindingStates)
+			uint32 DumpedBindingCount = 0;
+			for (FGlobalBindingState& GlobalState : GGlobalBindingStates)
 			{
-				if (BindingState.BindingId == 0 || BindingState.LiveCopies == 0)
+				FPriorityBindingState BindingState;
+				bool bActiveBinding = false;
+				if (GlobalState.Writer.test_and_set(std::memory_order_acquire))
 				{
 					continue;
 				}
+				if (GlobalState.ResourceId == IdentityId &&
+					GlobalState.State.BindingId != 0 &&
+					GlobalState.State.LiveCopies > 0)
+				{
+					BindingState = GlobalState.State;
+					bActiveBinding = true;
+				}
+				GlobalState.Writer.clear(std::memory_order_release);
+				if (!bActiveBinding)
+				{
+					continue;
+				}
+
 				++ActiveBindingCount;
+				if (DumpedBindingCount >= MaxFailureBindingDump)
+				{
+					continue;
+				}
+				++DumpedBindingCount;
 				UE_LOG(LogRHI, Error,
 					TEXT("RHI provenance retained binding: id=%llu binding_id=%llu owner_key=0x%llx live_copies=%u invalidated=%u submitted=%u last_op=%s last_pc=0x%llx"),
 					static_cast<unsigned long long>(IdentityId),
@@ -2164,11 +2210,13 @@ namespace
 					static_cast<unsigned long long>(BindingState.LastCallerAddress));
 			}
 			UE_LOG(LogRHI, Error,
-				TEXT("RHI provenance retained binding coverage: id=%llu active=%u capacity=%u omitted=%u tracking_enabled=%u"),
+				TEXT("RHI provenance retained binding coverage: id=%llu active=%u table_capacity=%u omitted=%u failure_log_dumped=%u/%u tracking_enabled=%u"),
 				static_cast<unsigned long long>(IdentityId),
 				ActiveBindingCount,
-				PriorityBindingStateCapacity,
+				GlobalBindingStateCapacity,
 				BindingStateOmitted,
+				DumpedBindingCount,
+				ActiveBindingCount,
 				CVarRHIResourceProvenanceCommandUses.GetValueOnAnyThread() != 0 ? 1u : 0u);
 
 			UE_LOG(LogRHI, Error,
@@ -3450,72 +3498,84 @@ void RecordBindingLifecycle(
 			bResourceWasStale = IsStalePriorityState(static_cast<EOperation>(
 				Identity->LastOperation.load(std::memory_order_acquire)));
 
-			LockPriorityIdentity(*Identity);
-			if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+			const uint64 BindingKey = MakeGlobalBindingKey(ResourceId, BindingId);
+			const uint32 StartIndex = HashPriorityValue(
+				BindingKey,
+				GlobalBindingStateCapacity - 1);
+			bool bBindingStateRecorded = false;
+			for (uint32 Probe = 0; Probe < GlobalBindingStateProbeLimit; ++Probe)
 			{
-				FPriorityBindingState* MatchingState = nullptr;
-				FPriorityBindingState* ReusableState = nullptr;
-				for (FPriorityBindingState& BindingState : Identity->BindingStates)
+				FGlobalBindingState& GlobalState =
+					GGlobalBindingStates[(StartIndex + Probe) & (GlobalBindingStateCapacity - 1)];
+				LockGlobalBindingState(GlobalState);
+				const bool bMatches =
+					GlobalState.ResourceId == ResourceId &&
+					GlobalState.State.BindingId == BindingId;
+				const bool bCanClaim =
+					GlobalState.ResourceId == 0 &&
+					Operation != EOperation::BindingRelease;
+				if (!bMatches && !bCanClaim)
 				{
-					if (BindingState.BindingId == BindingId)
+					const bool bReachedUnusedSlot = GlobalState.ResourceId == 0;
+					UnlockGlobalBindingState(GlobalState);
+					if (bReachedUnusedSlot)
 					{
-						MatchingState = &BindingState;
 						break;
 					}
-					if (!ReusableState && (BindingState.BindingId == 0 || BindingState.LiveCopies == 0))
-					{
-						ReusableState = &BindingState;
-					}
+					continue;
 				}
 
-				if (!MatchingState && Operation != EOperation::BindingRelease)
+				if (bCanClaim)
 				{
-					MatchingState = ReusableState;
-					if (MatchingState)
-					{
-						*MatchingState = {};
-						MatchingState->BindingId = BindingId;
-					}
-					else
-					{
-						++Identity->BindingStateOmitted;
-					}
+					GlobalState.ResourceId = ResourceId;
+					GlobalState.State = {};
+					GlobalState.State.BindingId = BindingId;
 				}
 
-				if (MatchingState)
+				FPriorityBindingState& BindingState = GlobalState.State;
+				BindingState.OwnerKey = OwnerKey != 0 ? OwnerKey : BindingState.OwnerKey;
+				BindingState.LastCallerAddress = CallerAddress;
+				BindingState.LastOperation = Operation;
+				if ((Operation == EOperation::BindingMove || Operation == EOperation::BindingSubmit) &&
+					BindingState.LiveCopies == 0)
 				{
-					MatchingState->OwnerKey = OwnerKey != 0 ? OwnerKey : MatchingState->OwnerKey;
-					MatchingState->LastCallerAddress = CallerAddress;
-					MatchingState->LastOperation = Operation;
-					if ((Operation == EOperation::BindingMove || Operation == EOperation::BindingSubmit) &&
-						MatchingState->LiveCopies == 0)
-					{
-						// Conservative recovery if tracing was enabled after the original create.
-						MatchingState->LiveCopies = 1;
-					}
-					if (Operation == EOperation::BindingCreate)
-					{
-						MatchingState->LiveCopies = 1;
-					}
-					else if (Operation == EOperation::BindingCopy)
-					{
-						++MatchingState->LiveCopies;
-					}
-					else if (Operation == EOperation::BindingRelease && MatchingState->LiveCopies > 0)
-					{
-						--MatchingState->LiveCopies;
-					}
-					if (Operation == EOperation::BindingInvalidate)
-					{
-						MatchingState->bInvalidated = true;
-					}
-					if (Operation == EOperation::BindingSubmit)
-					{
-						MatchingState->bSubmitted = true;
-					}
+					// Conservative recovery if tracing was enabled after the original create.
+					BindingState.LiveCopies = 1;
 				}
+				if (Operation == EOperation::BindingCreate)
+				{
+					BindingState.LiveCopies = 1;
+				}
+				else if (Operation == EOperation::BindingCopy)
+				{
+					++BindingState.LiveCopies;
+				}
+				else if (Operation == EOperation::BindingRelease && BindingState.LiveCopies > 0)
+				{
+					--BindingState.LiveCopies;
+				}
+				if (Operation == EOperation::BindingInvalidate)
+				{
+					BindingState.bInvalidated = true;
+				}
+				if (Operation == EOperation::BindingSubmit)
+				{
+					BindingState.bSubmitted = true;
+				}
+				UnlockGlobalBindingState(GlobalState);
+				bBindingStateRecorded = true;
+				break;
 			}
-			UnlockPriorityIdentity(*Identity);
+
+			if (!bBindingStateRecorded && Operation != EOperation::BindingRelease)
+			{
+				LockPriorityIdentity(*Identity);
+				if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
+				{
+					++Identity->BindingStateOmitted;
+				}
+				UnlockPriorityIdentity(*Identity);
+			}
 		}
 	}
 
@@ -3606,7 +3666,6 @@ void RecordReleaseCause(
 		static_cast<uint32>(Cause),
 		CallerAddress);
 
-	FPriorityBindingState ActiveBindings[PriorityBindingStateCapacity] {};
 	uint32 ActiveBindingCount = 0;
 	uint32 OmittedBindingCount = 0;
 	if (FPriorityIdentity* Identity = FindPriorityIdentity(ResourceId))
@@ -3615,20 +3674,32 @@ void RecordReleaseCause(
 		if (Identity->ResourceId.load(std::memory_order_relaxed) == ResourceId)
 		{
 			OmittedBindingCount = Identity->BindingStateOmitted;
-			for (const FPriorityBindingState& BindingState : Identity->BindingStates)
-			{
-				if (BindingState.BindingId != 0 && BindingState.LiveCopies > 0)
-				{
-					ActiveBindings[ActiveBindingCount++] = BindingState;
-				}
-			}
 		}
 		UnlockPriorityIdentity(*Identity);
 	}
 
-	for (uint32 BindingIndex = 0; BindingIndex < ActiveBindingCount; ++BindingIndex)
+	// Release is rare and correctness-critical. Scan the bounded global table and
+	// emit every live binding directly so the snapshot has no per-resource cap and
+	// does not need a large temporary stack or heap allocation.
+	for (FGlobalBindingState& GlobalState : GGlobalBindingStates)
 	{
-		const FPriorityBindingState& BindingState = ActiveBindings[BindingIndex];
+		FPriorityBindingState BindingState;
+		bool bRecordBinding = false;
+		LockGlobalBindingState(GlobalState);
+		if (GlobalState.ResourceId == ResourceId &&
+			GlobalState.State.BindingId != 0 &&
+			GlobalState.State.LiveCopies > 0)
+		{
+			BindingState = GlobalState.State;
+			bRecordBinding = true;
+		}
+		UnlockGlobalBindingState(GlobalState);
+		if (!bRecordBinding)
+		{
+			continue;
+		}
+
+		++ActiveBindingCount;
 		const uint32 PackedValue =
 			static_cast<uint32>(Cause) |
 			(static_cast<uint32>(BindingState.LastOperation) << 8) |
