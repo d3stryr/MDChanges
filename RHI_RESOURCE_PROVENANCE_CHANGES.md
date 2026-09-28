@@ -6,7 +6,7 @@ This repository mirrors complete modified files from `d3stryr/UnrealEngine` for 
 
 - Source repository: [d3stryr/UnrealEngine](https://github.com/d3stryr/UnrealEngine)
 - Source branch: [diagnostics/rhi-resource-provenance](https://github.com/d3stryr/UnrealEngine/tree/diagnostics/rhi-resource-provenance)
-- Source commit: [eee3540f6ea2a205f4556d212049d1581e2b3009](https://github.com/d3stryr/UnrealEngine/commit/eee3540f6ea2a205f4556d212049d1581e2b3009)
+- Source commit: [76b8f4a40520782ae45ff10a3b4f48517e728b24](https://github.com/d3stryr/UnrealEngine/commit/76b8f4a40520782ae45ff10a3b4f48517e728b24)
 - Engine version: 5.8.2
 - Initial mirror date: 2026-09-21
 
@@ -25,6 +25,7 @@ The files below are complete snapshots, not patch fragments. Their paths match t
 | `Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl` | `fe347fa221f615ec0e8f9e0da6f0e9a3c90e8db4` | Modified | Records correlated execution of selected RHI commands. |
 | `Engine/Build/BatchFiles/DecodeRHIResourceProvenance.py` | `14b0ea69d1b3f65ab21ff7f2906e510a79448b04` | Added | Filters journals and emits TSV with owners, command/binding IDs, causal IDs, GC state, and scene-refresh correlations. |
 | `RHI_RESOURCE_PROVENANCE_RUNBOOK.md` | `ede30c324283be0069a270646a28ad2f609450a6` | Added | Operational guide for PS5 launch settings, capture verification, journal retrieval, filtering, responsibility reports, interpretation, and troubleshooting. |
+| `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` | `c241ce29219ff0cc161cc5fcd0b08402535c63c3` | Added | Reusable confidential-environment prompt for joining generation, release, binding, contributor, command, World Partition, Data Layer, and coverage evidence. |
 | `Engine/Source/Runtime/Engine/Public/ParameterCollection.h` | `318c4ccc86833bd24bc182002cab56a36296f664` | Modified | Adds path/release/fixed-event APIs and carries diagnostic causal IDs into render-thread MPC updates. |
 | `Engine/Source/Runtime/Engine/Private/Materials/ParameterCollection.cpp` | `5f0b8def38a2b82258a898816e0dbc6a552fbc5f` | Modified | Captures MPC paths/release causes and queues game/render/RHI causal and GC-state events. |
 | `Engine/Source/Runtime/Engine/Public/Materials/MaterialParameterCollection.h` | `0c1b13751ff5eaf37ea109243970d8af4a95e886` | Modified | Exposes the diagnostic-only Asset Manager provenance bridge for MPC assets. |
@@ -497,6 +498,13 @@ Keep `r.RHI.ResourceProvenance.CommandUses 1` enabled for cached-binding and com
 - Engine commit: `eee3540f6ea2a205f4556d212049d1581e2b3009`.
 - Updated source blob: `Engine/Source/Runtime/Engine/Private/World.cpp` = `5f8644497acc2ecbb786048e7fe649071eab2d7e`.
 - This targeted repair has not yet been compiled with the PS5 SDK/toolchain.
+
+## 2026-09-28 — confidential analysis prompt
+
+- Added `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md` to the engine branch and complete-file mirror.
+- The prompt validates TSV/Excel precision, keeps generation identities separate from reused addresses, reconstructs release and stale-use timelines, resolves binding/contributor/command responsibility, audits coverage, and produces a fixed evidence-cited verdict format.
+- Engine commit: `76b8f4a40520782ae45ff10a3b4f48517e728b24`.
+- Prompt source blob: `c241ce29219ff0cc161cc5fcd0b08402535c63c3`.
 
 ## Next enhancement in sequence
 
