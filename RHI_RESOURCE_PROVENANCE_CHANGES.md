@@ -619,3 +619,21 @@ Keep the existing trace host arguments and add:
 `-ExecCmds="r.RHI.ResourceProvenance.CommandUses 1,r.RHI.ResourceProvenance.PriorityStacks 1,r.RHI.ResourceProvenance.Journal 1,r.RHI.ResourceProvenance.JournalMaxMB 10240" -trace=default,memory,module,metadata,assetmetadata,log`
 
 The memory trace must be active at process startup. After the crash, decode by the recovered resource address and inspect `Marker`, `BindingStore`, `CommandUse`, and `StackFrame` rows. Correlate `CommandEnqueue`, `CommandExecute`, and `InvalidUse` by `correlation`; resolve each `caller` PC using symbols from that exact executable build.
+
+## 2026-09-29 — Capture-driven generation-first analysis prompt
+
+- Reviewed the twelve available screenshots: ten pages from the new retained-failure log plus the earlier compile-error and preliminary-verdict images.
+- The retained side table identifies generation `1516848` at resource `0x107a13c220` / flags `0x107a13c228`; the failure banner's `observed_id=15987178197214944733`, type `221`, and `0xdddddddd` values are freed-memory poison and must not be used as identity.
+- Added capture-specific verification hints for `MPC_GlobalEnvironment`, collection GUID `29b56cb74cca1a3d8bba8787e4f00276`, the three candidate owner keys/materials, and candidate command correlation `435638533644002`.
+- Added a generation-first extraction rule: `--contains MPC_GlobalEnvironment` is discovery only; analysis must expand through `--id`, `--collection-guid`, each `--owner-key`, the exact stale `--binding` IDs, and then contributor/causal/scene/Data Layer/cell/teardown relationship IDs.
+- Documented that decoder filters are conjunctive and relationship exports should be separate unless an intersection is intentional.
+- Captured the new coverage interpretation: the global table capacity is `262144`; `active=80`, `omitted=0`, and `failure_log_dumped=80/80` mean the 80 rows are the complete active binding set for the generation, not a residual 16-row cap.
+- Added explicit instructions to identify all six `binding_submit_stale` events before naming a responsible mesh and not to equate the single retained exact-command owner with the crashing command without an ID/time join.
+- Recorded coverage risks from `contributor_descriptor_omissions=44424`, `contributor_without_runtime_cell=189`, and `command_owner_overwrites=9617`; absent joins are now treated as unknown rather than evidence against World Partition/Data Layer involvement.
+- Added exact JSON extraction commands for the generation, collection GUID, three owner keys, responsibility report, and candidate causal ID.
+- No decoder or runtime instrumentation code changed in this revision.
+
+### Source revision
+
+- Engine commit: `793dc9e600d124aa4940658e864e8796f5326b0a`
+- Analysis prompt blob: `7cbdb5dc38c2a1afca9861975f41f86591661f78`

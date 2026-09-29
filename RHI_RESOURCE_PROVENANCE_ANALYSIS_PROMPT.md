@@ -35,6 +35,42 @@ Release cause: MPCGameThreadDestroy
 
 Treat that as the immediate release mechanism, not automatically as the root cause.
 
+## Current capture observations to verify
+
+The 2026-09-29 capture provides the following preliminary identifiers. Treat them as discovery hints and verify each value against the attached decoder output before using it in a verdict:
+
+- retained resource generation ID: `1516848`;
+- resource address: `0x107a13c220`;
+- flags address: `0x107a13c228`;
+- collection path: `/Game/Art/3rd_Party/SoStylized/Environment/MPC_GlobalEnvironment.MPC_GlobalEnvironment`;
+- collection GUID: `29b56cb74cca1a3d8bba8787e4f00276`;
+- instance: `/Engine/Transient.MaterialParameterCollectionInstance_2147381558`;
+- world: `/Game/Maps/MainMap.MainMap`;
+- candidate access-owner keys: `0xe178c134fdd391b2`, `0xe178c10ebf7d45ae`, and `0xe178c10f9923cd9a`;
+- candidate materials: `MI_Water_Minimap`, `MI_UE4Man_ChestLogo`, and `M_UE4Man_Body`;
+- candidate exact-command correlation: `435638533644002`.
+
+The failure banner's `observed_id=15987178197214944733`, `observed_type=221`, and `old_packed=0xdddddddd` are freed-memory poison observations. Do not use the observed poison ID as the generation ID. The retained side table recovered generation `1516848`.
+
+The retained release-owner markers show this provisional chain:
+
+```text
+WorldPostGCInvalidCollection
+→ SceneParameterCollectionMapReplace
+→ MPCInstanceFinishDestroy
+→ MPCGameThreadDestroy / SafeRelease
+→ FinalRelease
+→ PhysicalFree
+```
+
+The release snapshot reports `active=80`, `table_capacity=262144`, `omitted=0`, and `failure_log_dumped=80/80`. Therefore 80 is the complete active set found for this generation in that capture, not a remaining 16-entry capacity cap. Every displayed retained binding has `live_copies=1` and `invalidated=0`; some had already been submitted and some had only been moved/stored.
+
+The coverage summary reports `binding_submit_stale=6`. Identify all six exact `BindingSubmit` rows and their binding IDs from the journal before selecting a responsible mesh. Do not assume the one retained `exact command owner` row is the command that caused the assertion unless its binding/correlation and cycle ordering join to `CommandExecute` or `InvalidUse`.
+
+Coverage is incomplete for contributor attribution: `contributor_descriptors=65536`, `contributor_descriptor_omissions=44424`, `contributor_without_actor=9`, and `contributor_without_runtime_cell=189`. Data Layer, cell-transition, primitive-teardown, and reference-census row omissions were reported as zero. Treat a missing actor, cell, or Data Layer join as unknown when its contributor descriptor may have been omitted; it is not evidence that streaming was uninvolved.
+
+Command ownership also experienced `command_owner_overwrites=9617`. Preserve exact correlation IDs and cycle ordering, and report when overwrite/eviction prevents a direct join.
+
 ## Data-integrity checks
 
 Before analyzing:
@@ -71,6 +107,24 @@ Determine, separately:
 Do not collapse these into one owner.
 
 ## Required analysis procedure
+
+### A0. Expand discovery into the complete relationship closure
+
+`--contains MPC_GlobalEnvironment` is only a discovery pass. It cannot enumerate bindings whose text contains only a material, proxy, actor, owner key, or relationship ID. Never use the name-filtered output as the final analysis dataset.
+
+After discovering the retained generation, export these as separate datasets because decoder filters are conjunctive:
+
+1. the complete generation with `--id 1516848`;
+2. every access owner for collection GUID `29b56cb74cca1a3d8bba8787e4f00276`;
+3. every candidate owner key;
+4. every binding that is live at release, submitted stale, invalidated, or referenced by the failure chain;
+5. each contributor linked to those bindings;
+6. each causal/correlation ID linked to stale enqueue or execution;
+7. each scene-refresh, Data Layer transition, cell transition, and primitive-teardown ID reached from those records.
+
+Do not combine `--id` with `--binding`, `--owner-key`, `--collection-guid`, or transition filters unless deliberately computing their intersection. Relationship rows may store the join ID in another field and may not carry the target resource ID.
+
+Use the generation export to find the six `BindingSubmit` rows ordered after `FinalRelease` or marked stale. Then export those binding IDs individually. Prioritize bindings that also reach `CommandEnqueue`, `CommandExecute`, or `InvalidUse`; do not export thousands of unrelated meshes merely because their materials reference the same MPC.
 
 ### A. Identify the target generation
 
@@ -522,6 +576,27 @@ py -3 $Decoder $Journal --primitive-teardown <id> --output ".\teardown-<id>.tsv"
 ```
 
 Replace placeholders with actual IDs found in the attachments.
+
+
+### Current-capture extraction set
+
+Run these as separate commands:
+
+```powershell
+$Decoder = ".\DecodeRHIResourceProvenance.py"
+$Journal = ".\capture.rhiprov"
+
+py -3 $Decoder $Journal --contains "MPC_GlobalEnvironment" --format json --output ".\01-mpc-discovery.json"
+py -3 $Decoder $Journal --id 1516848 --format json --output ".\02-generation-1516848.json"
+py -3 $Decoder $Journal --id 1516848 --responsibility-report --output ".\03-responsibility-1516848.md"
+py -3 $Decoder $Journal --collection-guid 29b56cb74cca1a3d8bba8787e4f00276 --format json --output ".\04-collection-owners.json"
+py -3 $Decoder $Journal --owner-key 0xe178c134fdd391b2 --format json --output ".\05-owner-water-minimap.json"
+py -3 $Decoder $Journal --owner-key 0xe178c10ebf7d45ae --format json --output ".\06-owner-chest-logo.json"
+py -3 $Decoder $Journal --owner-key 0xe178c10f9923cd9a --format json --output ".\07-owner-body.json"
+py -3 $Decoder $Journal --causal 435638533644002 --format json --output ".\08-causal-candidate.json"
+```
+
+Next, read `02-generation-1516848.json`, identify all six stale-submission binding IDs plus their contributor and transition IDs, and run the existing `--binding`, `--contributor`, `--scene-refresh`, `--data-layer-transition`, `--cell-transition`, and `--primitive-teardown` commands once per discovered ID. Do not guess absent IDs from labels.
 
 ## Accuracy rules
 
