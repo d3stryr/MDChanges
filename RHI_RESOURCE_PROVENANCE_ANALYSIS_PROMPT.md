@@ -596,7 +596,7 @@ py -3 $Decoder $Journal --owner-key 0xe178c10f9923cd9a --format json --output ".
 py -3 $Decoder $Journal --causal 435638533644002 --format json --output ".\08-causal-candidate.json"
 ```
 
-Next, read `02-generation-1516848.json`, identify all six stale-submission binding IDs plus their contributor and transition IDs, and run the existing `--binding`, `--contributor`, `--scene-refresh`, `--data-layer-transition`, `--cell-transition`, and `--primitive-teardown` commands once per discovered ID. Do not guess absent IDs from labels.
+Next, read `02-generation-1516848.json`. Treat `435638533644002` as a command correlation first, not automatically as a causal ID; run `--causal` only if matching CausalRequest/CausalExecute/CausalResource rows prove that interpretation. Identify all six stale-submission binding IDs plus their contributor and transition IDs, and run the existing `--binding`, `--contributor`, `--scene-refresh`, `--data-layer-transition`, `--cell-transition`, and `--primitive-teardown` commands once per discovered ID. Do not guess absent IDs from labels.
 
 ## Accuracy rules
 

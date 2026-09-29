@@ -630,10 +630,10 @@ The memory trace must be active at process startup. After the crash, decode by t
 - Captured the new coverage interpretation: the global table capacity is `262144`; `active=80`, `omitted=0`, and `failure_log_dumped=80/80` mean the 80 rows are the complete active binding set for the generation, not a residual 16-row cap.
 - Added explicit instructions to identify all six `binding_submit_stale` events before naming a responsible mesh and not to equate the single retained exact-command owner with the crashing command without an ID/time join.
 - Recorded coverage risks from `contributor_descriptor_omissions=44424`, `contributor_without_runtime_cell=189`, and `command_owner_overwrites=9617`; absent joins are now treated as unknown rather than evidence against World Partition/Data Layer involvement.
-- Added exact JSON extraction commands for the generation, collection GUID, three owner keys, responsibility report, and candidate causal ID.
+- Added exact JSON extraction commands for the generation, collection GUID, three owner keys, and responsibility report. The retained value `435638533644002` is treated as a command correlation; `--causal` is used only if CausalRequest/CausalExecute/CausalResource rows prove it is also a causal ID.
 - No decoder or runtime instrumentation code changed in this revision.
 
 ### Source revision
 
-- Engine commit: `793dc9e600d124aa4940658e864e8796f5326b0a`
-- Analysis prompt blob: `7cbdb5dc38c2a1afca9861975f41f86591661f78`
+- Engine commits: `793dc9e600d124aa4940658e864e8796f5326b0a`, `7f0a7c40305f28e779f1024a3b7e9f0ace4fdd22`
+- Analysis prompt blob: `fc213793b2b2d5d328adc561f5f0843ae3fec0d5`
