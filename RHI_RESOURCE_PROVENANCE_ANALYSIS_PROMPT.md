@@ -561,29 +561,76 @@ If a field is not established, write:
 Not established by current capture
 ```
 
-### 11. Next required decoder commands
+### 11. Two-pass evidence request and decoder commands
 
-If evidence is missing, provide exact commands using the discovered IDs:
+The confidential analysis environment cannot execute the decoder unless the binary `.rhiprov` journal and decoder are available there. When only decoded attachments are provided, inspect them and return exact PowerShell commands for the user to run locally. The user will attach those follow-up JSON files and rerun this prompt.
+
+#### Pass 1 behavior
+
+From `02-generation-1516848.json`:
+
+1. Find `FinalRelease` for resource ID `1516848`.
+2. Find every target-generation `BindingSubmit` whose `cycles` are later than `FinalRelease` or whose detail records the target as stale.
+3. Deduplicate nonzero `binding_id` values.
+4. Collect any nonzero `contributor_id`, `causal_id`, `scene_refresh_id`, `data_layer_transition_id`, `cell_transition_id`, and `primitive_teardown_id` already present on the relevant rows.
+5. Do not assume the process-wide `binding_submit_stale=6` counter means six target-generation submissions.
+
+If required binding or contributor files are missing, produce an `Additional evidence required` section before attempting a final responsibility verdict. Include:
+
+| Relationship | Exact ID | Why it is needed | Expected output file |
+|---|---:|---|---|
+
+Then emit a single copy-paste-ready PowerShell block. Replace every placeholder with an exact ID found in the attachments. Emit one command per unique ID. Never return `<binding-id>` or `<contributor-id>` when the real ID is already available.
+
+Binding command template:
 
 ```powershell
-py -3 $Decoder $Journal --binding <id> --output ".\binding-<id>.tsv"
-py -3 $Decoder $Journal --contributor <id> --output ".\contributor-<id>.tsv"
-py -3 $Decoder $Journal --causal <id> --output ".\causal-<id>.tsv"
-py -3 $Decoder $Journal --scene-refresh <id> --output ".\scene-refresh-<id>.tsv"
-py -3 $Decoder $Journal --data-layer-transition <id> --output ".\data-layer-<id>.tsv"
-py -3 $Decoder $Journal --cell-transition <id> --output ".\cell-<id>.tsv"
-py -3 $Decoder $Journal --primitive-teardown <id> --output ".\teardown-<id>.tsv"
+py -3 $Decoder $Journal `
+  --binding <binding-id> `
+  --format json `
+  --output ".\binding-<binding-id>.json"
 ```
 
-Replace placeholders with actual IDs found in the attachments.
-
-
-### Current-capture extraction set
-
-Run these as separate commands:
+Contributor command template:
 
 ```powershell
-$Decoder = ".\DecodeRHIResourceProvenance.py"
+py -3 $Decoder $Journal `
+  --contributor <contributor-id> `
+  --format json `
+  --output ".\contributor-<contributor-id>.json"
+```
+
+If `BindingContributor` rows in the generation export already expose contributor IDs, request both binding and contributor exports in the same response. Otherwise request the binding exports first.
+
+#### Pass 2 behavior
+
+When binding JSON files are attached:
+
+1. Join `BindingCreate`, `BindingCopy`, `BindingMove`, `BindingOwner`, `BindingContributor`, `BindingSubmit`, `BindingInvalidate`, and `BindingRelease` by exact binding ID.
+2. Extract every nonzero contributor ID linked to a target-generation stale binding.
+3. If the corresponding contributor file is absent, output exact `--contributor` commands immediately.
+4. Request causal, scene-refresh, Data Layer, cell, or primitive-teardown exports only for relationship IDs actually connected to the suspicious bindings.
+
+Use these templates for other proven relationship IDs:
+
+```powershell
+py -3 $Decoder $Journal --causal <id> --format json --output ".\causal-<id>.json"
+py -3 $Decoder $Journal --scene-refresh <id> --format json --output ".\scene-refresh-<id>.json"
+py -3 $Decoder $Journal --data-layer-transition <id> --format json --output ".\data-layer-<id>.json"
+py -3 $Decoder $Journal --cell-transition <id> --format json --output ".\cell-<id>.json"
+py -3 $Decoder $Journal --primitive-teardown <id> --format json --output ".\teardown-<id>.json"
+```
+
+Do not run `--causal` merely because a retained command correlation exists. First verify that the value appears on `CausalRequest`, `CausalExecute`, `CausalLink`, or `CausalResource` rows.
+
+#### Final-report gate
+
+Generate the final responsibility report only when the available files support the requested joins. If required files are still missing, provide a provisional finding plus the exact next commands. If capture coverage says a descriptor was omitted, report the coverage gap instead of repeatedly requesting a file that cannot exist.
+
+### Current-capture Pass 1 extraction set
+
+```powershell
+$Decoder = ".\Engine\Build\BatchFiles\DecodeRHIResourceProvenance.py"
 $Journal = ".\capture.rhiprov"
 
 py -3 $Decoder $Journal --contains "MPC_GlobalEnvironment" --format json --output ".\01-mpc-discovery.json"
@@ -593,10 +640,9 @@ py -3 $Decoder $Journal --collection-guid 29b56cb74cca1a3d8bba8787e4f00276 --for
 py -3 $Decoder $Journal --owner-key 0xe178c134fdd391b2 --format json --output ".\05-owner-water-minimap.json"
 py -3 $Decoder $Journal --owner-key 0xe178c10ebf7d45ae --format json --output ".\06-owner-chest-logo.json"
 py -3 $Decoder $Journal --owner-key 0xe178c10f9923cd9a --format json --output ".\07-owner-body.json"
-py -3 $Decoder $Journal --causal 435638533644002 --format json --output ".\08-causal-candidate.json"
 ```
 
-Next, read `02-generation-1516848.json`. Treat `435638533644002` as a command correlation first, not automatically as a causal ID; run `--causal` only if matching CausalRequest/CausalExecute/CausalResource rows prove that interpretation. Identify every target-generation stale-submission binding ID plus its contributor and transition IDs, and run the existing `--binding`, `--contributor`, `--scene-refresh`, `--data-layer-transition`, `--cell-transition`, and `--primitive-teardown` commands once per discovered ID. Do not guess absent IDs from labels.
+Files `01` through `07` are the initial attachment set. Analyze them first, then output exact binding/contributor commands for the second attachment set.
 
 ## Accuracy rules
 

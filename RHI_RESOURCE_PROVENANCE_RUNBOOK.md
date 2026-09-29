@@ -328,6 +328,120 @@ py -3 $Decoder $Journal `
   --output ".\teardown-93.tsv"
 ```
 
+## Current `MPC_GlobalEnvironment` capture: exact JSON extraction
+
+Use this block for retained generation `1516848`. Keep these as separate decoder commands because normal decoder filters are combined with logical **AND**.
+
+The current capture attempted approximately 109,960 contributor descriptors (`65536` recorded plus `44424` omitted). For the next reproduction, add `r.RHI.ResourceProvenance.MaxContributorDescriptors 131072` to the existing `-ExecCmds` list. If the same route still reports descriptor omissions, raise it to `262144` and verify that journal queue/disk-drop counters remain zero.
+
+### Pass 1: generation, responsibility, collection, and owners
+
+```powershell
+$Decoder = ".\Engine\Build\BatchFiles\DecodeRHIResourceProvenance.py"
+$Journal = ".\capture.rhiprov"
+
+py -3 $Decoder $Journal `
+  --contains "MPC_GlobalEnvironment" `
+  --format json `
+  --output ".\01-mpc-discovery.json"
+
+py -3 $Decoder $Journal `
+  --id 1516848 `
+  --format json `
+  --output ".\02-generation-1516848.json"
+
+py -3 $Decoder $Journal `
+  --id 1516848 `
+  --responsibility-report `
+  --output ".\03-responsibility-1516848.md"
+
+py -3 $Decoder $Journal `
+  --collection-guid 29b56cb74cca1a3d8bba8787e4f00276 `
+  --format json `
+  --output ".\04-collection-owners.json"
+
+py -3 $Decoder $Journal `
+  --owner-key 0xe178c134fdd391b2 `
+  --format json `
+  --output ".\05-owner-water-minimap.json"
+
+py -3 $Decoder $Journal `
+  --owner-key 0xe178c10ebf7d45ae `
+  --format json `
+  --output ".\06-owner-chest-logo.json"
+
+py -3 $Decoder $Journal `
+  --owner-key 0xe178c10f9923cd9a `
+  --format json `
+  --output ".\07-owner-body.json"
+```
+
+Attach files `01` through `07` with `RHI_RESOURCE_PROVENANCE_ANALYSIS_PROMPT.md`. The prompt can inspect the generation JSON, distinguish the process-wide stale-submit count from target-generation rows, and return exact second-pass commands using the IDs it finds.
+
+### Find target-generation stale submissions locally
+
+```powershell
+$Records = (
+    Get-Content ".\02-generation-1516848.json" -Raw |
+    ConvertFrom-Json
+).records
+
+$FinalRelease = $Records |
+    Where-Object operation -eq "FinalRelease" |
+    Sort-Object { [UInt64]$_.cycles } |
+    Select-Object -First 1
+
+if ($null -eq $FinalRelease) {
+    throw "No FinalRelease row was found for generation 1516848."
+}
+
+$FinalCycles = [UInt64]$FinalRelease.cycles
+
+$TargetStaleSubmits = $Records |
+    Where-Object {
+        $_.operation -eq "BindingSubmit" -and
+        [UInt64]$_.cycles -gt $FinalCycles
+    } |
+    Sort-Object { [UInt64]$_.cycles }
+
+$TargetStaleSubmits |
+    Select-Object cycles, binding_id, owner_key, correlation, caller, detail, text |
+    Format-Table -AutoSize
+
+$TargetBindingIds = $TargetStaleSubmits |
+    ForEach-Object binding_id |
+    Where-Object { $_ -and $_ -ne "0" } |
+    Sort-Object -Unique
+
+$TargetBindingIds
+```
+
+`binding_submit_stale` in the crash coverage line is process-wide. The script above selects only `BindingSubmit` rows for generation `1516848` that occur after that generation's `FinalRelease`.
+
+### Pass 2: binding and contributor relationship files
+
+For every binding ID returned by the prompt or `$TargetBindingIds`, run:
+
+```powershell
+py -3 $Decoder $Journal `
+  --binding <binding-id> `
+  --format json `
+  --output ".\binding-<binding-id>.json"
+```
+
+Attach the binding JSON files to the same analysis prompt. For every nonzero `contributor_id` identified in the generation or binding exports, run:
+
+```powershell
+py -3 $Decoder $Journal `
+  --contributor <contributor-id> `
+  --format json `
+  --output ".\contributor-<contributor-id>.json"
+```
+
+The analysis prompt must replace every placeholder with an exact discovered ID and emit one command per required file. If the input already contains a contributor ID, it should request the contributor export immediately rather than waiting for another pass. If a contributor descriptor was omitted by capture coverage, no decoder filter can reconstruct it; the report must identify that as a coverage gap.
+
+After attaching the requested relationship files, rerun the prompt to generate the final responsibility report. It may also request exact `--causal`, `--scene-refresh`, `--data-layer-transition`, `--cell-transition`, or `--primitive-teardown` exports when those relationship IDs are present.
+
 ## Filter semantics
 
 Normal filters are combined with logical **AND**. For example:

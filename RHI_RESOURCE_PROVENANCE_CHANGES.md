@@ -637,3 +637,21 @@ The memory trace must be active at process startup. After the crash, decode by t
 
 - Engine commits: `793dc9e600d124aa4940658e864e8796f5326b0a`, `7f0a7c40305f28e779f1024a3b7e9f0ace4fdd22`, `63f9266184b6b73d82c229571e04ad4b56923730`
 - Analysis prompt blob: `04afd431a8d5e21c530661301d70e422b6f644cb`
+
+## 2026-09-29 — Two-pass MPC evidence extraction workflow
+
+- Added the exact `MPC_GlobalEnvironment` JSON extraction set for retained generation `1516848`, collection GUID `29b56cb74cca1a3d8bba8787e4f00276`, and the three retained owner keys.
+- Added PowerShell processing for `02-generation-1516848.json` that finds `FinalRelease`, selects target-generation `BindingSubmit` rows occurring afterward, prints them with `Format-Table -AutoSize`, and emits deduplicated nonzero binding IDs.
+- Added a guard that stops with an explicit error when the generation export does not contain `FinalRelease`.
+- Added second-pass JSON templates for exact `--binding` and `--contributor` exports.
+- Updated the confidential analysis prompt to derive binding/contributor IDs from attached data and return one copy-paste-ready command per exact missing relationship ID.
+- Added a two-pass final-report gate: initial files `01` through `07` produce exact evidence requests; binding files expose contributor/transition joins; the final report is generated only when the evidence supports those joins.
+- Clarified that an AI analyzing decoded attachments cannot execute the decoder without the confidential `.rhiprov` journal and must request local exports instead.
+- Documented the contributor coverage response: the current capture attempted approximately 109,960 descriptors, so the next reproduction should use `r.RHI.ResourceProvenance.MaxContributorDescriptors 131072`, escalating to `262144` only if omissions persist and journal drop counters remain zero.
+- No runtime instrumentation or decoder behavior changed.
+
+### Source revision
+
+- Engine commit: `f399dd8a8230347ca35638218c925953593ff7a6`
+- Runbook blob: `38ebd7aa9af8179a66d905d0135900fbaad009ce`
+- Analysis prompt blob: `21051ccd8095205cac2526ac8ff6a8e1ea90ff35`
