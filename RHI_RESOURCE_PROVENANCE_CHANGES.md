@@ -628,12 +628,12 @@ The memory trace must be active at process startup. After the crash, decode by t
 - Added a generation-first extraction rule: `--contains MPC_GlobalEnvironment` is discovery only; analysis must expand through `--id`, `--collection-guid`, each `--owner-key`, the exact stale `--binding` IDs, and then contributor/causal/scene/Data Layer/cell/teardown relationship IDs.
 - Documented that decoder filters are conjunctive and relationship exports should be separate unless an intersection is intentional.
 - Captured the new coverage interpretation: the global table capacity is `262144`; `active=80`, `omitted=0`, and `failure_log_dumped=80/80` mean the 80 rows are the complete active binding set for the generation, not a residual 16-row cap.
-- Added explicit instructions to identify all six `binding_submit_stale` events before naming a responsible mesh and not to equate the single retained exact-command owner with the crashing command without an ID/time join.
+- Clarified that `binding_submit_stale=6` is process-wide: the generation export must determine which stale submissions actually carry resource ID `1516848` before naming a responsible mesh. The single retained exact-command owner also requires an ID/time join to the crashing command.
 - Recorded coverage risks from `contributor_descriptor_omissions=44424`, `contributor_without_runtime_cell=189`, and `command_owner_overwrites=9617`; absent joins are now treated as unknown rather than evidence against World Partition/Data Layer involvement.
 - Added exact JSON extraction commands for the generation, collection GUID, three owner keys, and responsibility report. The retained value `435638533644002` is treated as a command correlation; `--causal` is used only if CausalRequest/CausalExecute/CausalResource rows prove it is also a causal ID.
 - No decoder or runtime instrumentation code changed in this revision.
 
 ### Source revision
 
-- Engine commits: `793dc9e600d124aa4940658e864e8796f5326b0a`, `7f0a7c40305f28e779f1024a3b7e9f0ace4fdd22`
-- Analysis prompt blob: `fc213793b2b2d5d328adc561f5f0843ae3fec0d5`
+- Engine commits: `793dc9e600d124aa4940658e864e8796f5326b0a`, `7f0a7c40305f28e779f1024a3b7e9f0ace4fdd22`, `63f9266184b6b73d82c229571e04ad4b56923730`
+- Analysis prompt blob: `04afd431a8d5e21c530661301d70e422b6f644cb`

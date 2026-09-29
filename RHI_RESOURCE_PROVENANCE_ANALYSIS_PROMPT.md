@@ -65,7 +65,7 @@ WorldPostGCInvalidCollection
 
 The release snapshot reports `active=80`, `table_capacity=262144`, `omitted=0`, and `failure_log_dumped=80/80`. Therefore 80 is the complete active set found for this generation in that capture, not a remaining 16-entry capacity cap. Every displayed retained binding has `live_copies=1` and `invalidated=0`; some had already been submitted and some had only been moved/stored.
 
-The coverage summary reports `binding_submit_stale=6`. Identify all six exact `BindingSubmit` rows and their binding IDs from the journal before selecting a responsible mesh. Do not assume the one retained `exact command owner` row is the command that caused the assertion unless its binding/correlation and cycle ordering join to `CommandExecute` or `InvalidUse`.
+The coverage summary reports the process-wide counter `binding_submit_stale=6`. Determine how many of those six rows carry generation `1516848`; do not assume every process-wide stale submission belongs to this MPC. Identify each matching target-generation `BindingSubmit` row and binding ID before selecting a responsible mesh. Do not assume the one retained `exact command owner` row is the command that caused the assertion unless its binding/correlation and cycle ordering join to `CommandExecute` or `InvalidUse`.
 
 Coverage is incomplete for contributor attribution: `contributor_descriptors=65536`, `contributor_descriptor_omissions=44424`, `contributor_without_actor=9`, and `contributor_without_runtime_cell=189`. Data Layer, cell-transition, primitive-teardown, and reference-census row omissions were reported as zero. Treat a missing actor, cell, or Data Layer join as unknown when its contributor descriptor may have been omitted; it is not evidence that streaming was uninvolved.
 
@@ -124,7 +124,7 @@ After discovering the retained generation, export these as separate datasets bec
 
 Do not combine `--id` with `--binding`, `--owner-key`, `--collection-guid`, or transition filters unless deliberately computing their intersection. Relationship rows may store the join ID in another field and may not carry the target resource ID.
 
-Use the generation export to find the six `BindingSubmit` rows ordered after `FinalRelease` or marked stale. Then export those binding IDs individually. Prioritize bindings that also reach `CommandEnqueue`, `CommandExecute`, or `InvalidUse`; do not export thousands of unrelated meshes merely because their materials reference the same MPC.
+Use the generation export to find every target-generation `BindingSubmit` row ordered after `FinalRelease` or otherwise recorded while the target was stale. Compare that target count with the process-wide count of six, then export only the matching binding IDs individually. Prioritize bindings that also reach `CommandEnqueue`, `CommandExecute`, or `InvalidUse`; do not export thousands of unrelated meshes merely because their materials reference the same MPC.
 
 ### A. Identify the target generation
 
@@ -596,7 +596,7 @@ py -3 $Decoder $Journal --owner-key 0xe178c10f9923cd9a --format json --output ".
 py -3 $Decoder $Journal --causal 435638533644002 --format json --output ".\08-causal-candidate.json"
 ```
 
-Next, read `02-generation-1516848.json`. Treat `435638533644002` as a command correlation first, not automatically as a causal ID; run `--causal` only if matching CausalRequest/CausalExecute/CausalResource rows prove that interpretation. Identify all six stale-submission binding IDs plus their contributor and transition IDs, and run the existing `--binding`, `--contributor`, `--scene-refresh`, `--data-layer-transition`, `--cell-transition`, and `--primitive-teardown` commands once per discovered ID. Do not guess absent IDs from labels.
+Next, read `02-generation-1516848.json`. Treat `435638533644002` as a command correlation first, not automatically as a causal ID; run `--causal` only if matching CausalRequest/CausalExecute/CausalResource rows prove that interpretation. Identify every target-generation stale-submission binding ID plus its contributor and transition IDs, and run the existing `--binding`, `--contributor`, `--scene-refresh`, `--data-layer-transition`, `--cell-transition`, and `--primitive-teardown` commands once per discovered ID. Do not guess absent IDs from labels.
 
 ## Accuracy rules
 
